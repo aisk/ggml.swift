@@ -1,0 +1,4 @@
+module CGGML {
+    header "ggml.h"
+    export *
+}
