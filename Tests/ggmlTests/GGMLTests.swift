@@ -330,6 +330,98 @@ final class TensorOpsTests: XCTestCase {
         XCTAssertEqual(transposed, [1, 4, 2, 5, 3, 6])
     }
 
+    func testUnaryMath() throws {
+        XCTAssertEqual(try evaluate(tensor([-1, 4]).neg()), [1, -4])
+        XCTAssertEqual(try evaluate(tensor([-1, 4]).abs()), [1, 4])
+        XCTAssertEqual(try evaluate(tensor([3, -2]).sqr()), [9, 4])
+        XCTAssertEqual(try evaluate(tensor([9, 16]).sqrt()), [3, 4])
+        XCTAssertEqual(try evaluate(tensor([1]).log()), [0])
+        XCTAssertEqual(try evaluate(tensor([0]).exp()), [1])
+        XCTAssertEqual(try evaluate(tensor([0]).sin()), [0])
+        XCTAssertEqual(try evaluate(tensor([0]).cos()), [1])
+        XCTAssertEqual(try evaluate(tensor([-2, 0.5, 3]).clamp(min: -1, max: 1)), [-1, 0.5, 1])
+        XCTAssertEqual(try evaluate(tensor([1, 2]).dup()), [1, 2])
+    }
+
+    func testMoreActivations() throws {
+        let leaky = try evaluate(tensor([-2, 3]).leakyRelu(negativeSlope: 0.1))
+        XCTAssertEqual(leaky[0], -0.2, accuracy: 1e-6)
+        XCTAssertEqual(leaky[1], 3)
+        XCTAssertEqual(try evaluate(tensor([0]).geluQuick()), [0])
+    }
+
+    func testReductions() throws {
+        XCTAssertEqual(try evaluate(tensor([1, 2, 3, 4]).sum()), [10])
+
+        // [1 2 3; 4 5 6] as a 3-column, 2-row matrix.
+        let m = context.tensor(.f32, 3, 2)
+        m.copy(from: [1, 2, 3, 4, 5, 6])
+
+        let rowSums = m.sumRows()
+        XCTAssertEqual(try evaluate(rowSums), [6, 15])
+        XCTAssertEqual(rowSums.shape, [1, 2])
+        XCTAssertEqual(try evaluate(m.mean()), [2, 5])
+
+        let peaks = context.tensor(.f32, 3, 2)
+        peaks.copy(from: [1, 5, 3, 9, 2, 4])
+        let indices = peaks.argmax()
+        let graph = context.graph()
+        graph.buildForwardExpand(indices)
+        try graph.compute()
+        XCTAssertEqual(indices.type, .i32)
+        XCTAssertEqual(indices.int32s(), [1, 0])
+    }
+
+    func testDataMovement() throws {
+        // Embedding-style row gather.
+        let table = context.tensor(.f32, 3, 2)
+        table.copy(from: [1, 2, 3, 4, 5, 6])
+        let ids = context.tensor(.i32, 3)
+        ids.copy(from: [1, 0, 1] as [Int32])
+        let gathered = table.getRows(ids)
+        XCTAssertEqual(try evaluate(gathered), [4, 5, 6, 1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(gathered.shape, [3, 3])
+
+        let pattern = tensor([1, 2])
+        let target = context.tensor(.f32, 2, 2)
+        XCTAssertEqual(try evaluate(pattern.repeated(like: target)), [1, 2, 1, 2])
+
+        XCTAssertEqual(try evaluate(tensor([1, 2]).concat(tensor([3]), dim: 0)), [1, 2, 3])
+    }
+
+    func testCausalMask() throws {
+        let scores = context.tensor(.f32, 3, 3)
+        scores.copy(from: [Float](repeating: 1, count: 9))
+
+        let masked = try evaluate(scores.diagMaskInf(nPast: 0))
+        XCTAssertEqual(masked[0], 1)
+        XCTAssertEqual(masked[1], -.infinity)
+        XCTAssertEqual(masked[2], -.infinity)
+        XCTAssertEqual(masked[3], 1)
+        XCTAssertEqual(masked[4], 1)
+        XCTAssertEqual(masked[5], -.infinity)
+        XCTAssertEqual(Array(masked[6...]), [1, 1, 1])
+    }
+
+    func testRope() throws {
+        // [head_dim = 4, n_head = 1, n_tokens = 2]
+        let q = context.tensor(.f32, 4, 1, 2)
+        let values: [Float] = [1, 2, 3, 4, 5, 6, 7, 8]
+        q.copy(from: values)
+
+        // At position 0 the rotation is the identity.
+        let zeros = context.tensor(.i32, 2)
+        zeros.copy(from: [0, 0] as [Int32])
+        XCTAssertEqual(try evaluate(q.rope(zeros, nDims: 4)), values)
+
+        // A non-zero position rotates the second token.
+        let positions = context.tensor(.i32, 2)
+        positions.copy(from: [0, 1] as [Int32])
+        let rotated = try evaluate(q.rope(positions, nDims: 4))
+        XCTAssertEqual(Array(rotated[0..<4]), [1, 2, 3, 4])
+        XCTAssertNotEqual(Array(rotated[4...]), [5, 6, 7, 8])
+    }
+
     func testChainedGraph() throws {
         // (a · wᵀ + bias).relu() — one dense layer.
         let w = context.tensor(.f32, 2, 3)

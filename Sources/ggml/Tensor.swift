@@ -106,6 +106,41 @@ public struct Tensor {
         }
     }
 
+    /// Copies `values` into the tensor's data.
+    /// The tensor must be of type ``TensorType/i32``.
+    ///
+    /// Disfavored so that untyped integer-literal arrays resolve to the
+    /// `[Float]` overload; pass `as [Int32]` explicitly for i32 tensors.
+    @_disfavoredOverload
+    public func copy(from values: [Int32]) {
+        precondition(type == .i32, "copy(from: [Int32]) requires an i32 tensor, got \(type)")
+        precondition(values.count == elementCount,
+                     "value count \(values.count) does not match element count \(elementCount)")
+        values.withUnsafeBytes { source in
+            if isBackendAllocated {
+                ggml_backend_tensor_set(rawValue, source.baseAddress!, 0, byteCount)
+            } else {
+                rawValue.pointee.data.copyMemory(from: source.baseAddress!, byteCount: byteCount)
+            }
+        }
+    }
+
+    /// Reads the tensor's data as an array of `Int32`.
+    /// The tensor must be of type ``TensorType/i32``.
+    public func int32s() -> [Int32] {
+        precondition(type == .i32, "int32s() requires an i32 tensor, got \(type)")
+        return [Int32](unsafeUninitializedCapacity: elementCount) { destination, count in
+            if isBackendAllocated {
+                ggml_backend_tensor_get(rawValue, destination.baseAddress!, 0, byteCount)
+            } else {
+                destination.baseAddress!.update(
+                    from: rawValue.pointee.data.assumingMemoryBound(to: Int32.self),
+                    count: elementCount)
+            }
+            count = elementCount
+        }
+    }
+
     /// Raw read-only access to the tensor's data buffer.
     public func withUnsafeBytes<R>(_ body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R {
         try body(UnsafeRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
