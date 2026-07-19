@@ -104,12 +104,4 @@ public struct Tensor {
     public func withUnsafeMutableBytes<R>(_ body: (UnsafeMutableRawBufferPointer) throws -> R) rethrows -> R {
         try body(UnsafeMutableRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
     }
-
-    // MARK: - Operations
-
-    /// Matrix multiplication: `result = self * otherᵀ`, recorded in this
-    /// tensor's context. Sugar for ``Context/mulMat(_:_:)``.
-    public func mulMat(_ other: Tensor) -> Tensor {
-        context.mulMat(self, other)
-    }
 }

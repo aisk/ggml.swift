@@ -65,17 +65,6 @@ public final class Context {
         return Tensor(rawValue: tensor!, context: self)
     }
 
-    // MARK: - Operations
-
-    /// Matrix multiplication: `result = a * bᵀ`. Mirrors `ggml_mul_mat`.
-    ///
-    /// Following ggml's convention, `b` is applied transposed: for row-major
-    /// matrices A `(n×k)` and B `(m×k)`, the result is `(m×n)` — i.e.
-    /// `result[i][j] = dot(A[j], B[i])`.
-    public func mulMat(_ a: Tensor, _ b: Tensor) -> Tensor {
-        Tensor(rawValue: ggml_mul_mat(rawValue, a.rawValue, b.rawValue), context: self)
-    }
-
     // MARK: - Graphs
 
     /// Creates an empty compute graph with the default capacity

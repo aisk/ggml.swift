@@ -129,3 +129,102 @@ final class SimpleBackendTests: XCTestCase {
         XCTAssertNotNil(byName)
     }
 }
+
+final class TensorOpsTests: XCTestCase {
+    private var context: Context!
+
+    override func setUpWithError() throws {
+        context = try Context(memorySize: 16 * 1024 * 1024)
+    }
+
+    override func tearDown() {
+        context = nil
+    }
+
+    /// Computes the graph for `tensor` on the CPU and returns its values.
+    private func evaluate(_ tensor: Tensor) throws -> [Float] {
+        let graph = context.graph()
+        graph.buildForwardExpand(tensor)
+        try graph.compute()
+        return tensor.floats()
+    }
+
+    private func tensor(_ values: [Float]) -> Tensor {
+        let t = context.tensor(.f32, values.count)
+        t.copy(from: values)
+        return t
+    }
+
+    func testArithmetic() throws {
+        let a = tensor([1, 2, 3, 4])
+        let b = tensor([10, 20, 30, 40])
+
+        XCTAssertEqual(try evaluate(a.add(b)), [11, 22, 33, 44])
+        XCTAssertEqual(try evaluate(b.sub(a)), [9, 18, 27, 36])
+        XCTAssertEqual(try evaluate(a.mul(b)), [10, 40, 90, 160])
+        XCTAssertEqual(try evaluate(b.div(a)), [10, 10, 10, 10])
+        XCTAssertEqual(try evaluate(a.scale(2)), [2, 4, 6, 8])
+    }
+
+    func testOperatorSugar() throws {
+        let a = tensor([1, 2, 3, 4])
+        let b = tensor([10, 20, 30, 40])
+
+        XCTAssertEqual(try evaluate(a + b), [11, 22, 33, 44])
+        XCTAssertEqual(try evaluate(b - a), [9, 18, 27, 36])
+        XCTAssertEqual(try evaluate(a * b), [10, 40, 90, 160])
+        XCTAssertEqual(try evaluate(b / a), [10, 10, 10, 10])
+        XCTAssertEqual(try evaluate(a * 3), [3, 6, 9, 12])
+        XCTAssertEqual(try evaluate(0.5 * b), [5, 10, 15, 20])
+    }
+
+    func testActivations() throws {
+        XCTAssertEqual(try evaluate(tensor([-1, 0, 2, -3]).relu()), [0, 0, 2, 0])
+        XCTAssertEqual(try evaluate(tensor([0]).sigmoid()), [0.5])
+        XCTAssertEqual(try evaluate(tensor([0]).tanh()), [0])
+        XCTAssertEqual(try evaluate(tensor([0]).gelu()), [0])
+        XCTAssertEqual(try evaluate(tensor([0]).silu()), [0])
+        XCTAssertEqual(try evaluate(tensor([0, 0, 0, 0]).softMax()), [0.25, 0.25, 0.25, 0.25])
+    }
+
+    func testNormalization() throws {
+        // rms([3, 4]) = sqrt((9 + 16) / 2) = sqrt(12.5)
+        let rms = Float(12.5).squareRoot()
+        let normalized = try evaluate(tensor([3, 4]).rmsNorm(eps: 0))
+        XCTAssertEqual(normalized[0], 3 / rms, accuracy: 1e-5)
+        XCTAssertEqual(normalized[1], 4 / rms, accuracy: 1e-5)
+
+        // norm() standardizes to zero mean and unit variance.
+        let standardized = try evaluate(tensor([1, 3]).norm(eps: 0))
+        XCTAssertEqual(standardized[0], -1, accuracy: 1e-5)
+        XCTAssertEqual(standardized[1], 1, accuracy: 1e-5)
+    }
+
+    func testShapeOps() throws {
+        // Row-major 2x3 matrix (3 columns, 2 rows): [1 2 3; 4 5 6]
+        let m = context.tensor(.f32, 3, 2)
+        m.copy(from: [1, 2, 3, 4, 5, 6])
+
+        XCTAssertEqual(m.transpose().shape, [2, 3])
+        XCTAssertEqual(m.permute(1, 0, 2, 3).shape, [2, 3])
+        XCTAssertEqual(m.reshape(6).shape, [6])
+        XCTAssertEqual(m.reshape(2, 3).shape, [2, 3])
+        XCTAssertEqual(m.reshape(like: tensor([0, 0, 0, 0, 0, 0])).shape, [6])
+
+        // cont() materializes the transposed view into contiguous memory.
+        let transposed = try evaluate(m.transpose().cont())
+        XCTAssertEqual(transposed, [1, 4, 2, 5, 3, 6])
+    }
+
+    func testChainedGraph() throws {
+        // (a · wᵀ + bias).relu() — one dense layer.
+        let w = context.tensor(.f32, 2, 3)
+        w.copy(from: [1, 0, 0, 1, -1, -1])
+        let x = context.tensor(.f32, 2)
+        x.copy(from: [3, 5])
+        let bias = tensor([1, 1, 1])
+
+        let out = try evaluate((w.mulMat(x) + bias).relu())
+        XCTAssertEqual(out, [4, 6, 0])
+    }
+}
