@@ -24,6 +24,12 @@ public final class Context {
         self.rawValue = context
     }
 
+    /// Takes ownership of an existing `ggml_context` created elsewhere
+    /// (e.g. by `gguf_init_from_file`); it is freed on deinit as usual.
+    init(adopting rawValue: OpaquePointer) {
+        self.rawValue = rawValue
+    }
+
     deinit {
         ggml_free(rawValue)
     }
@@ -63,6 +69,11 @@ public final class Context {
         var ne = shape.map(Int64.init)
         let tensor = ggml_new_tensor(rawValue, type.cValue, Int32(ne.count), &ne)
         return Tensor(rawValue: tensor!, context: self)
+    }
+
+    /// Looks up a tensor in this context by name. Mirrors `ggml_get_tensor`.
+    public func tensor(named name: String) -> Tensor? {
+        ggml_get_tensor(rawValue, name).map { Tensor(rawValue: $0, context: self) }
     }
 
     // MARK: - Graphs

@@ -130,6 +130,120 @@ final class SimpleBackendTests: XCTestCase {
     }
 }
 
+/// GGUF write/read round trip, then inference from the loaded weights —
+/// a miniature of ggml's `examples/mnist` eval path.
+final class GGUFTests: XCTestCase {
+    private var path: String!
+
+    override func setUp() {
+        path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ggml-swift-test-\(UUID().uuidString).gguf").path
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    private func writeModel() throws {
+        let context = try Context(memorySize: 1024 * 1024)
+
+        // A 4 -> 3 -> 2 fully connected network with hand-picked weights.
+        let fc1Weight = context.tensor(.f32, 4, 3)
+        fc1Weight.name = "fc1.weight"
+        fc1Weight.copy(from: [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 1,
+        ])
+        let fc1Bias = context.tensor(.f32, 3)
+        fc1Bias.name = "fc1.bias"
+        fc1Bias.copy(from: [0, -3, 0])
+
+        let fc2Weight = context.tensor(.f32, 3, 2)
+        fc2Weight.name = "fc2.weight"
+        fc2Weight.copy(from: [
+            1, 1, 1,
+            -1, 0, 1,
+        ])
+        let fc2Bias = context.tensor(.f32, 2)
+        fc2Bias.name = "fc2.bias"
+        fc2Bias.copy(from: [0.5, -0.5])
+
+        let gguf = GGUF()
+        gguf.set("mnist-fc", forKey: "general.architecture")
+        gguf.set(3, forKey: "test.epochs")
+        gguf.set(0.05, forKey: "test.learning_rate")
+        gguf.set(true, forKey: "test.trained")
+        gguf.add(fc1Weight)
+        gguf.add(fc1Bias)
+        gguf.add(fc2Weight)
+        gguf.add(fc2Bias)
+        try gguf.write(to: path)
+    }
+
+    func testRoundTripMetadataAndTensors() throws {
+        try writeModel()
+
+        let gguf = try GGUF(path: path)
+
+        XCTAssertEqual(gguf.string("general.architecture"), "mnist-fc")
+        XCTAssertEqual(gguf.int("test.epochs"), 3)
+        XCTAssertEqual(gguf.double("test.learning_rate"), 0.05)
+        XCTAssertEqual(gguf.bool("test.trained"), true)
+        XCTAssertNil(gguf.string("missing.key"))
+        XCTAssertEqual(Set(gguf.keys).isSuperset(of: [
+            "general.architecture", "test.epochs", "test.learning_rate", "test.trained",
+        ]), true)
+
+        XCTAssertEqual(gguf.tensorCount, 4)
+        XCTAssertEqual(Set(gguf.tensorNames),
+                       ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"])
+
+        let fc1Weight = try XCTUnwrap(gguf.tensor(named: "fc1.weight"))
+        XCTAssertEqual(fc1Weight.shape, [4, 3])
+        XCTAssertEqual(fc1Weight.floats(), [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 1,
+        ])
+        XCTAssertNil(gguf.tensor(named: "fc3.weight"))
+    }
+
+    func testInferenceFromLoadedModel() throws {
+        try writeModel()
+
+        let gguf = try GGUF(path: path)
+        let fc1Weight = try XCTUnwrap(gguf.tensor(named: "fc1.weight"))
+        let fc1Bias = try XCTUnwrap(gguf.tensor(named: "fc1.bias"))
+        let fc2Weight = try XCTUnwrap(gguf.tensor(named: "fc2.weight"))
+        let fc2Bias = try XCTUnwrap(gguf.tensor(named: "fc2.bias"))
+
+        // Build and run the eval graph in a separate compute context; the
+        // loaded weights participate via within(_:).
+        let compute = try Context(memorySize: 1024 * 1024)
+        let x = compute.tensor(.f32, 4)
+        x.copy(from: [1, 2, 3, 4])
+
+        let hidden = fc1Weight.within(compute).mulMat(x).add(fc1Bias).relu()
+        let logits = fc2Weight.within(compute).mulMat(hidden).add(fc2Bias)
+
+        let graph = compute.graph()
+        graph.buildForwardExpand(logits)
+        try graph.compute()
+
+        // fc1: [1, 2, 7] + [0, -3, 0] -> relu -> [1, 0, 7]
+        // fc2: [8, 6] + [0.5, -0.5] -> [8.5, 5.5]
+        XCTAssertEqual(logits.floats(), [8.5, 5.5])
+    }
+
+    func testLoadFailureThrows() {
+        XCTAssertThrowsError(try GGUF(path: "/nonexistent/model.gguf")) { error in
+            XCTAssertEqual(error as? GGMLError,
+                           .ggufLoadFailed(path: "/nonexistent/model.gguf"))
+        }
+    }
+}
+
 final class TensorOpsTests: XCTestCase {
     private var context: Context!
 

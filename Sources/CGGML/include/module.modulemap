@@ -3,5 +3,6 @@ module CGGML {
     header "ggml-alloc.h"
     header "ggml-backend.h"
     header "ggml-cpu.h"
+    header "gguf.h"
     export *
 }

@@ -38,4 +38,8 @@ public enum GGMLError: Error, Equatable {
     case contextInitFailed
     /// A graph computation finished with a non-success status.
     case computeFailed(Status)
+    /// `gguf_init_from_file` could not read the file.
+    case ggufLoadFailed(path: String)
+    /// `gguf_write_to_file` could not write the file.
+    case ggufWriteFailed(path: String)
 }

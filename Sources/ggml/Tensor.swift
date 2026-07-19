@@ -15,6 +15,17 @@ public struct Tensor {
         self.context = context
     }
 
+    /// Returns the same tensor bound to another context, so that operations
+    /// starting from it are recorded there.
+    ///
+    /// Needed when the leading operand of an expression lives in a different
+    /// context than the graph being built — typically weights loaded from a
+    /// ``GGUF`` file: `weights.within(graphContext).mulMat(x)`. The receiver's
+    /// own context must stay alive for as long as the result is used.
+    public func within(_ context: Context) -> Tensor {
+        Tensor(rawValue: rawValue, context: context)
+    }
+
     /// Element type of the tensor.
     public var type: TensorType {
         TensorType(cValue: rawValue.pointee.type)
