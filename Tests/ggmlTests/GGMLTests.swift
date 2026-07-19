@@ -73,3 +73,59 @@ final class SimpleContextTests: XCTestCase {
         XCTAssertGreaterThan(context.usedMemory, 0)
     }
 }
+
+/// Port of ggml's `examples/simple/simple-backend.cpp`.
+final class SimpleBackendTests: XCTestCase {
+    func testMatMulViaScheduler() throws {
+        Backend.loadAll()
+
+        let best = try XCTUnwrap(Backend.best())
+        let cpu = try XCTUnwrap(Backend(type: .cpu))
+        let scheduler = Scheduler(backends: [best, cpu])
+
+        // The context only holds tensor metadata and the graph; tensor data
+        // is allocated in backend buffers by the scheduler.
+        let contextSize = Context.tensorOverhead * Graph.defaultSize + Context.graphOverhead
+        let context = try Context(memorySize: contextSize, noAlloc: true)
+
+        let a = context.tensor(.f32, 2, 4)
+        let b = context.tensor(.f32, 2, 3)
+        let result = a.mulMat(b)
+
+        let graph = context.graph()
+        graph.buildForwardExpand(result)
+
+        scheduler.reset()
+        XCTAssertTrue(scheduler.allocGraph(graph))
+        XCTAssertTrue(a.isBackendAllocated)
+
+        a.copy(from: [
+            2, 8,
+            5, 1,
+            4, 2,
+            8, 6,
+        ])
+        b.copy(from: [
+            10, 5,
+            9, 9,
+            5, 4,
+        ])
+
+        try scheduler.compute(graph)
+
+        XCTAssertEqual(result.shape, [4, 3])
+        XCTAssertEqual(result.floats(), [
+            60, 55, 50, 110,
+            90, 54, 54, 126,
+            42, 29, 28, 64,
+        ])
+    }
+
+    func testCPUBackendProperties() throws {
+        let cpu = try XCTUnwrap(Backend(type: .cpu))
+        XCTAssertEqual(cpu.name, "CPU")
+
+        let byName = Backend(name: "CPU")
+        XCTAssertNotNil(byName)
+    }
+}

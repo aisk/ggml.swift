@@ -1,5 +1,7 @@
 module CGGML {
     header "ggml.h"
+    header "ggml-alloc.h"
+    header "ggml-backend.h"
     header "ggml-cpu.h"
     export *
 }

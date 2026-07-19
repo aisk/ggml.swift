@@ -50,25 +50,47 @@ public struct Tensor {
 
     // MARK: - Data access
 
-    /// Copies `values` into the tensor's data buffer.
+    /// Whether the tensor's data lives in a backend buffer (modern path)
+    /// rather than directly in its context (legacy path).
+    public var isBackendAllocated: Bool {
+        rawValue.pointee.buffer != nil
+    }
+
+    /// Copies `values` into the tensor's data.
     /// The tensor must be of type ``TensorType/f32``.
+    ///
+    /// Works for both storage modes: backend-allocated tensors go through
+    /// `ggml_backend_tensor_set` (handles device memory), context-allocated
+    /// tensors are written directly.
     public func copy(from values: [Float]) {
         precondition(type == .f32, "copy(from: [Float]) requires an f32 tensor, got \(type)")
         precondition(values.count == elementCount,
                      "value count \(values.count) does not match element count \(elementCount)")
         values.withUnsafeBytes { source in
-            rawValue.pointee.data.copyMemory(from: source.baseAddress!, byteCount: byteCount)
+            if isBackendAllocated {
+                ggml_backend_tensor_set(rawValue, source.baseAddress!, 0, byteCount)
+            } else {
+                rawValue.pointee.data.copyMemory(from: source.baseAddress!, byteCount: byteCount)
+            }
         }
     }
 
-    /// Reads the tensor's data buffer as an array of `Float`.
+    /// Reads the tensor's data as an array of `Float`.
     /// The tensor must be of type ``TensorType/f32``.
+    ///
+    /// Works for both storage modes: backend-allocated tensors go through
+    /// `ggml_backend_tensor_get` (handles device memory), context-allocated
+    /// tensors are read directly.
     public func floats() -> [Float] {
         precondition(type == .f32, "floats() requires an f32 tensor, got \(type)")
         return [Float](unsafeUninitializedCapacity: elementCount) { destination, count in
-            destination.baseAddress!.update(
-                from: rawValue.pointee.data.assumingMemoryBound(to: Float.self),
-                count: elementCount)
+            if isBackendAllocated {
+                ggml_backend_tensor_get(rawValue, destination.baseAddress!, 0, byteCount)
+            } else {
+                destination.baseAddress!.update(
+                    from: rawValue.pointee.data.assumingMemoryBound(to: Float.self),
+                    count: elementCount)
+            }
             count = elementCount
         }
     }

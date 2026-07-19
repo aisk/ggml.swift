@@ -5,6 +5,9 @@ import CGGML
 /// Like tensors, graphs are owned by their context; the class only keeps the
 /// context alive and exposes the graph API.
 public final class Graph {
+    /// Default node capacity of a graph (`GGML_DEFAULT_GRAPH_SIZE`).
+    public static let defaultSize = Int(GGML_DEFAULT_GRAPH_SIZE)
+
     let rawValue: OpaquePointer
     let context: Context
 
