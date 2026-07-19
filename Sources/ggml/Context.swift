@@ -8,6 +8,10 @@ import CGGML
 public final class Context {
     let rawValue: OpaquePointer
 
+    // Backend buffers holding data of tensors from this context; retained
+    // so the data outlives neither the context nor its tensors.
+    var retainedBuffers: [BackendBuffer] = []
+
     /// Creates a context backed by an internally allocated arena of
     /// `memorySize` bytes. Mirrors `ggml_init`.
     ///

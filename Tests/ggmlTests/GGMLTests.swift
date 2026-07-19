@@ -244,6 +244,55 @@ final class GGUFTests: XCTestCase {
     }
 }
 
+/// Explicit backend-buffer allocation and direct backend compute — the
+/// pattern used to place model weights on a device.
+final class BackendBufferTests: XCTestCase {
+    func testAllocTensorsAndCompute() throws {
+        let cpu = try XCTUnwrap(Backend(type: .cpu))
+        cpu.cpuSetNThreads(2)
+
+        let contextSize = Context.tensorOverhead * Graph.defaultSize + Context.graphOverhead
+        let context = try Context(memorySize: contextSize, noAlloc: true)
+
+        let a = context.tensor(.f32, 2, 4)
+        let b = context.tensor(.f32, 2, 3)
+        let result = a.mulMat(b)
+        let graph = context.graph()
+        graph.buildForwardExpand(result)
+
+        // Allocates every tensor in the context — weights, inputs and
+        // intermediate results alike — in one buffer on the backend.
+        let buffer = try context.allocTensors(on: cpu)
+        XCTAssertGreaterThan(buffer.size, 0)
+        XCTAssertFalse(buffer.name.isEmpty)
+        XCTAssertTrue(a.isBackendAllocated)
+
+        a.copy(from: [2, 8, 5, 1, 4, 2, 8, 6])
+        b.copy(from: [10, 5, 9, 9, 5, 4])
+        try cpu.compute(graph)
+
+        XCTAssertEqual(result.floats(), [
+            60, 55, 50, 110,
+            90, 54, 54, 126,
+            42, 29, 28, 64,
+        ])
+    }
+
+    func testDeviceRegistry() throws {
+        let devices = Device.all
+        XCTAssertFalse(devices.isEmpty)
+
+        let cpu = try XCTUnwrap(Device(type: .cpu))
+        XCTAssertEqual(cpu.name, "CPU")
+        XCTAssertEqual(cpu.type, .cpu)
+        XCTAssertFalse(cpu.description.isEmpty)
+        XCTAssertGreaterThan(cpu.memory.total, 0)
+
+        let backend = try XCTUnwrap(cpu.makeBackend())
+        XCTAssertEqual(backend.name, "CPU")
+    }
+}
+
 final class TensorOpsTests: XCTestCase {
     private var context: Context!
 

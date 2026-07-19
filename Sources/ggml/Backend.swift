@@ -72,6 +72,24 @@ public final class Backend {
     public var name: String {
         String(cString: ggml_backend_name(rawValue))
     }
+
+    /// Executes a graph directly on this backend. All graph tensors must
+    /// already be allocated in buffers this backend can use (e.g. via
+    /// ``Context/allocTensors(on:)``). For multi-backend execution or
+    /// automatic allocation use a ``Scheduler`` instead.
+    /// Mirrors `ggml_backend_graph_compute`.
+    public func compute(_ graph: Graph) throws {
+        let status = Status(cValue: ggml_backend_graph_compute(rawValue, graph.rawValue))
+        guard status == .success else {
+            throw GGMLError.computeFailed(status)
+        }
+    }
+
+    /// Sets the number of threads a CPU backend computes with. Must only
+    /// be called on a CPU backend. Mirrors `ggml_backend_cpu_set_n_threads`.
+    public func cpuSetNThreads(_ nThreads: Int) {
+        ggml_backend_cpu_set_n_threads(rawValue, Int32(nThreads))
+    }
 }
 
 extension Backend: CustomStringConvertible {
