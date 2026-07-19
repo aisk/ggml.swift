@@ -75,40 +75,73 @@ public struct Tensor {
         rawValue.pointee.buffer != nil
     }
 
-    /// Copies `values` into the tensor's data.
-    /// The tensor must be of type ``TensorType/f32``.
+    private func writeRaw(_ source: UnsafeRawBufferPointer) {
+        if isBackendAllocated {
+            ggml_backend_tensor_set(rawValue, source.baseAddress!, 0, byteCount)
+        } else {
+            rawValue.pointee.data.copyMemory(from: source.baseAddress!, byteCount: byteCount)
+        }
+    }
+
+    private func readRaw(into destination: UnsafeMutableRawPointer) {
+        if isBackendAllocated {
+            ggml_backend_tensor_get(rawValue, destination, 0, byteCount)
+        } else {
+            destination.copyMemory(from: rawValue.pointee.data, byteCount: byteCount)
+        }
+    }
+
+    /// Copies `values` into the tensor's data, converting/quantizing to the
+    /// tensor's element type on the fly (via `ggml_quantize_chunk` for
+    /// non-f32 types). Types requiring an importance matrix are unsupported.
     ///
     /// Works for both storage modes: backend-allocated tensors go through
     /// `ggml_backend_tensor_set` (handles device memory), context-allocated
     /// tensors are written directly.
     public func copy(from values: [Float]) {
-        precondition(type == .f32, "copy(from: [Float]) requires an f32 tensor, got \(type)")
         precondition(values.count == elementCount,
                      "value count \(values.count) does not match element count \(elementCount)")
-        values.withUnsafeBytes { source in
-            if isBackendAllocated {
-                ggml_backend_tensor_set(rawValue, source.baseAddress!, 0, byteCount)
-            } else {
-                rawValue.pointee.data.copyMemory(from: source.baseAddress!, byteCount: byteCount)
-            }
+        if type == .f32 {
+            values.withUnsafeBytes(writeRaw)
+            return
         }
+
+        precondition(!type.requiresImatrix,
+                     "quantizing to \(type) requires an importance matrix")
+        let rowWidth = shape[0]
+        let rows = elementCount / rowWidth
+        var quantized = [UInt8](repeating: 0, count: byteCount)
+        let written = quantized.withUnsafeMutableBytes { destination in
+            ggml_quantize_chunk(type.cValue, values, destination.baseAddress!,
+                                0, Int64(rows), Int64(rowWidth), nil)
+        }
+        precondition(written == byteCount, "quantization produced \(written) of \(byteCount) bytes")
+        quantized.withUnsafeBytes(writeRaw)
     }
 
-    /// Reads the tensor's data as an array of `Float`.
-    /// The tensor must be of type ``TensorType/f32``.
+    /// Reads the tensor's data as an array of `Float`, dequantizing/
+    /// converting from the tensor's element type on the fly (via the type's
+    /// `to_float` trait). The tensor must be contiguous.
     ///
     /// Works for both storage modes: backend-allocated tensors go through
     /// `ggml_backend_tensor_get` (handles device memory), context-allocated
     /// tensors are read directly.
     public func floats() -> [Float] {
-        precondition(type == .f32, "floats() requires an f32 tensor, got \(type)")
+        if type == .f32 {
+            return [Float](unsafeUninitializedCapacity: elementCount) { destination, count in
+                readRaw(into: destination.baseAddress!)
+                count = elementCount
+            }
+        }
+
+        guard let toFloat = ggml_get_type_traits(type.cValue).pointee.to_float else {
+            preconditionFailure("\(type) cannot be converted to floats")
+        }
+        var raw = [UInt8](repeating: 0, count: byteCount)
+        raw.withUnsafeMutableBytes { readRaw(into: $0.baseAddress!) }
         return [Float](unsafeUninitializedCapacity: elementCount) { destination, count in
-            if isBackendAllocated {
-                ggml_backend_tensor_get(rawValue, destination.baseAddress!, 0, byteCount)
-            } else {
-                destination.baseAddress!.update(
-                    from: rawValue.pointee.data.assumingMemoryBound(to: Float.self),
-                    count: elementCount)
+            raw.withUnsafeBytes { source in
+                toFloat(source.baseAddress!, destination.baseAddress!, Int64(elementCount))
             }
             count = elementCount
         }

@@ -555,6 +555,52 @@ final class TensorOpsTests: XCTestCase {
         }
     }
 
+    func testQuantizedTypeProperties() {
+        XCTAssertEqual(TensorType.q8_0.name, "q8_0")
+        XCTAssertTrue(TensorType.q8_0.isQuantized)
+        XCTAssertEqual(TensorType.q8_0.blockSize, 32)
+        XCTAssertFalse(TensorType.q8_0.requiresImatrix)
+        XCTAssertFalse(TensorType.f16.isQuantized)
+        XCTAssertEqual(TensorType.q4_K.name, "q4_K")
+        XCTAssertEqual(TensorType.f32.rowSize(10), 40)
+    }
+
+    func testF16RoundTrip() throws {
+        let half = context.tensor(.f16, 4)
+        half.copy(from: [1.5, -2, 0.25, 100])
+        XCTAssertEqual(half.floats(), [1.5, -2, 0.25, 100])
+    }
+
+    func testQuantizedRoundTrip() throws {
+        let values = (0..<32).map { Float($0) / 16 - 1 }
+        let quantized = context.tensor(.q8_0, 32)
+        quantized.copy(from: values)
+
+        for (dequantized, original) in zip(quantized.floats(), values) {
+            XCTAssertEqual(dequantized, original, accuracy: 0.01)
+        }
+    }
+
+    func testQuantizedMatMul() throws {
+        // The llama.cpp pattern: quantized weights, f32 activations.
+        let weights = (0..<64).map { Float($0 % 7) / 4 - 0.7 }
+        let x = (0..<32).map { Float($0 % 5) / 3 - 0.6 }
+
+        let wq = context.tensor(.q8_0, 32, 2)
+        wq.copy(from: weights)
+        let wf = context.tensor(.f32, 32, 2)
+        wf.copy(from: weights)
+        let input = context.tensor(.f32, 32)
+        input.copy(from: x)
+
+        let quantizedResult = try evaluate(wq.mulMat(input))
+        let referenceResult = try evaluate(wf.mulMat(input))
+
+        for (q, r) in zip(quantizedResult, referenceResult) {
+            XCTAssertEqual(q, r, accuracy: 0.1)
+        }
+    }
+
     func testChainedGraph() throws {
         // (a · wᵀ + bias).relu() — one dense layer.
         let w = context.tensor(.f32, 2, 3)
