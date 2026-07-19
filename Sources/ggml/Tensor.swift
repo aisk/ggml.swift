@@ -43,6 +43,14 @@ public struct Tensor {
         return [ne.0, ne.1, ne.2, ne.3].prefix(dimensions).map(Int.init)
     }
 
+    /// Byte stride per dimension (`nb` in ggml), innermost first.
+    /// `strides[1]` is the row stride for a matrix.
+    public var strides: [Int] {
+        let nb = rawValue.pointee.nb
+        let all: [Int] = [Int(nb.0), Int(nb.1), Int(nb.2), Int(nb.3)]
+        return Array(all.prefix(dimensions))
+    }
+
     /// Total number of elements. Mirrors `ggml_nelements`.
     public var elementCount: Int {
         Int(ggml_nelements(rawValue))

@@ -273,6 +273,109 @@ extension Tensor {
     }
 }
 
+/// Sort direction for ``Tensor/argsort(order:)``. Mirrors `ggml_sort_order`.
+public enum SortOrder: Sendable {
+    case asc
+    case desc
+
+    var cValue: ggml_sort_order {
+        switch self {
+        case .asc: return GGML_SORT_ORDER_ASC
+        case .desc: return GGML_SORT_ORDER_DESC
+        }
+    }
+}
+
+extension Tensor {
+    // MARK: - Views
+
+    /// A 1d view of `ne0` elements starting at `offset` bytes.
+    /// Mirrors `ggml_view_1d`.
+    public func view(_ ne0: Int, offset: Int) -> Tensor {
+        wrap(ggml_view_1d(context.rawValue, rawValue, Int64(ne0), offset))
+    }
+
+    /// A 2d view with row stride `nb1` (in bytes). Mirrors `ggml_view_2d`.
+    public func view(_ ne0: Int, _ ne1: Int, nb1: Int, offset: Int) -> Tensor {
+        wrap(ggml_view_2d(context.rawValue, rawValue, Int64(ne0), Int64(ne1), nb1, offset))
+    }
+
+    /// A 3d view with row/slice strides in bytes. Mirrors `ggml_view_3d`.
+    public func view(_ ne0: Int, _ ne1: Int, _ ne2: Int, nb1: Int, nb2: Int, offset: Int) -> Tensor {
+        wrap(ggml_view_3d(context.rawValue, rawValue,
+                          Int64(ne0), Int64(ne1), Int64(ne2), nb1, nb2, offset))
+    }
+
+    /// A 4d view with strides in bytes. Mirrors `ggml_view_4d`.
+    public func view(_ ne0: Int, _ ne1: Int, _ ne2: Int, _ ne3: Int,
+                     nb1: Int, nb2: Int, nb3: Int, offset: Int) -> Tensor {
+        wrap(ggml_view_4d(context.rawValue, rawValue,
+                          Int64(ne0), Int64(ne1), Int64(ne2), Int64(ne3), nb1, nb2, nb3, offset))
+    }
+
+    // MARK: - Copies and casts
+
+    /// Copies the receiver into `b` (which may be a view, e.g. a KV cache
+    /// slot) and returns a view of `b`. Mirrors `ggml_cpy`.
+    public func cpy(to b: Tensor) -> Tensor {
+        wrap(ggml_cpy(context.rawValue, rawValue, b.rawValue))
+    }
+
+    /// Converts the tensor to another element type. Mirrors `ggml_cast`.
+    public func cast(to type: TensorType) -> Tensor {
+        wrap(ggml_cast(context.rawValue, rawValue, type.cValue))
+    }
+
+    /// Returns a copy of the receiver with `b` written at `offset` bytes,
+    /// treating the data as flat. Mirrors `ggml_set_1d`.
+    public func set(_ b: Tensor, offset: Int) -> Tensor {
+        wrap(ggml_set_1d(context.rawValue, rawValue, b.rawValue, offset))
+    }
+
+    /// Returns a copy of the receiver with `b` written as a strided block
+    /// at `offset` bytes. Mirrors `ggml_set`.
+    public func set(_ b: Tensor, nb1: Int, nb2: Int, nb3: Int, offset: Int) -> Tensor {
+        wrap(ggml_set(context.rawValue, rawValue, b.rawValue, nb1, nb2, nb3, offset))
+    }
+
+    // MARK: - Attention
+
+    /// Fused scaled masked softmax: `softMax(self * scale + mask)`, with
+    /// optional ALiBi bias. Mirrors `ggml_soft_max_ext`.
+    public func softMaxExt(mask: Tensor? = nil, scale: Float = 1, maxBias: Float = 0) -> Tensor {
+        wrap(ggml_soft_max_ext(context.rawValue, rawValue, mask?.rawValue, scale, maxBias))
+    }
+
+    /// Fused attention: `softMax(self · kᵀ * scale + mask) · v`, where the
+    /// receiver is the query. Mirrors `ggml_flash_attn_ext`; see the ggml
+    /// header for the expected q/k/v layouts.
+    public func flashAttnExt(
+        k: Tensor,
+        v: Tensor,
+        mask: Tensor? = nil,
+        scale: Float,
+        maxBias: Float = 0,
+        logitSoftcap: Float = 0
+    ) -> Tensor {
+        wrap(ggml_flash_attn_ext(context.rawValue, rawValue, k.rawValue, v.rawValue,
+                                 mask?.rawValue, scale, maxBias, logitSoftcap))
+    }
+
+    // MARK: - Sorting
+
+    /// Indices that would sort each row, as an i32 tensor.
+    /// Mirrors `ggml_argsort`.
+    public func argsort(order: SortOrder) -> Tensor {
+        wrap(ggml_argsort(context.rawValue, rawValue, order.cValue))
+    }
+
+    /// Indices of the `k` largest elements per row (in no particular
+    /// order), as an i32 tensor. Mirrors `ggml_top_k`.
+    public func topK(_ k: Int) -> Tensor {
+        wrap(ggml_top_k(context.rawValue, rawValue, Int32(k)))
+    }
+}
+
 // Operator sugar for the element-wise arithmetic operations. Only
 // unambiguous mappings get an operator; matrix multiplication does not.
 extension Tensor {

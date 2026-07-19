@@ -471,6 +471,90 @@ final class TensorOpsTests: XCTestCase {
         XCTAssertNotEqual(Array(rotated[4...]), [5, 6, 7, 8])
     }
 
+    func testViews() throws {
+        let t = tensor([1, 2, 3, 4, 5, 6])
+        let floatSize = MemoryLayout<Float>.size
+
+        let slice = t.view(2, offset: 2 * floatSize)
+        XCTAssertEqual(try evaluate(slice.cont()), [3, 4])
+
+        // Top-left 2x2 block of [1 2 3; 4 5 6].
+        let m = context.tensor(.f32, 3, 2)
+        m.copy(from: [1, 2, 3, 4, 5, 6])
+        let block = m.view(2, 2, nb1: m.strides[1], offset: 0)
+        XCTAssertEqual(try evaluate(block.cont()), [1, 2, 4, 5])
+    }
+
+    func testCopyAndSet() throws {
+        // KV-cache pattern: write a token's vector into a slot of the cache.
+        let cache = tensor([0, 0, 0, 0, 0, 0])
+        let entry = tensor([7, 8])
+        let slot = cache.view(2, offset: 2 * MemoryLayout<Float>.size)
+
+        let graph = context.graph()
+        graph.buildForwardExpand(entry.cpy(to: slot))
+        try graph.compute()
+        XCTAssertEqual(cache.floats(), [0, 0, 7, 8, 0, 0])
+
+        XCTAssertEqual(
+            try evaluate(tensor([0, 0, 0, 0]).set(tensor([7, 8]), offset: MemoryLayout<Float>.size)),
+            [0, 7, 8, 0])
+    }
+
+    func testCast() throws {
+        let roundTripped = tensor([1.5, -2, 0.25]).cast(to: .f16).cast(to: .f32)
+        XCTAssertEqual(try evaluate(roundTripped), [1.5, -2, 0.25])
+    }
+
+    func testSoftMaxExt() throws {
+        XCTAssertEqual(try evaluate(tensor([0, 0]).softMaxExt()), [0.5, 0.5])
+
+        // The mask sends the second logit to -inf.
+        let mask = tensor([0, -.infinity])
+        let masked = try evaluate(tensor([0, 0]).softMaxExt(mask: mask, scale: 1))
+        XCTAssertEqual(masked, [1, 0])
+    }
+
+    func testSorting() throws {
+        let indices = tensor([3, 1, 2]).argsort(order: .asc)
+        let graph = context.graph()
+        graph.buildForwardExpand(indices)
+        try graph.compute()
+        XCTAssertEqual(indices.int32s(), [1, 2, 0])
+
+        let top = tensor([1, 9, 5, 7]).topK(2)
+        let graph2 = context.graph()
+        graph2.buildForwardExpand(top)
+        try graph2.compute()
+        XCTAssertEqual(Set(top.int32s()), [1, 3])
+    }
+
+    func testFlashAttention() throws {
+        // One head, head_dim 4, 2 queries over 3 kv entries. Compare the
+        // fused op against attention composed from primitive ops.
+        let qValues: [Float] = [0.1, 0.2, 0.3, 0.4, -0.2, 0.1, 0.5, -0.1]
+        let kValues: [Float] = [0.3, 0.1, -0.2, 0.4, 0.05, -0.3, 0.2, 0.1, -0.1, 0.25, 0.3, -0.2]
+        let vValues: [Float] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        let scale = Float(0.5)
+
+        let q = context.tensor(.f32, 4, 2, 1)
+        q.copy(from: qValues)
+        let k = context.tensor(.f32, 4, 3, 1)
+        k.copy(from: kValues)
+        let v = context.tensor(.f32, 4, 3, 1)
+        v.copy(from: vValues)
+
+        let fused = try evaluate(q.flashAttnExt(k: k, v: v, scale: scale))
+
+        let reference = try evaluate(
+            v.transpose().cont().mulMat(k.mulMat(q).softMaxExt(scale: scale)))
+
+        XCTAssertEqual(fused.count, reference.count)
+        for (f, r) in zip(fused, reference) {
+            XCTAssertEqual(f, r, accuracy: 1e-4)
+        }
+    }
+
     func testChainedGraph() throws {
         // (a · wᵀ + bias).relu() — one dense layer.
         let w = context.tensor(.f32, 2, 3)
