@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "ggml.swift",
     products: [
-        .library(name: "ggml.swift", targets: ["ggml.swift"]),
+        .library(name: "ggml", targets: ["ggml"]),
     ],
     targets: [
         // Vendored C/C++ sources are part of this package checkout, so a
@@ -16,7 +16,8 @@ let package = Package(
             sources: [
                 "src/ggml.c", "src/ggml.cpp", "src/ggml-alloc.c",
                 "src/ggml-backend.cpp", "src/ggml-backend-meta.cpp",
-                "src/ggml-backend-reg.cpp", "src/ggml-opt.cpp",
+                "src/ggml-backend-reg.cpp", "src/ggml-backend-dl.cpp",
+                "src/ggml-opt.cpp",
                 "src/ggml-threading.cpp", "src/ggml-quants.c", "src/gguf.cpp",
                 "src/ggml-cpu/ggml-cpu.c", "src/ggml-cpu/ggml-cpu.cpp",
                 "src/ggml-cpu/repack.cpp", "src/ggml-cpu/hbm.cpp",
@@ -46,8 +47,8 @@ let package = Package(
                 .linkedLibrary("pthread", .when(platforms: [.linux])),
             ]
         ),
-        .target(name: "ggml.swift", dependencies: ["CGGML"]),
-        .testTarget(name: "ggml.swiftTests", dependencies: ["ggml.swift"]),
+        .target(name: "ggml", dependencies: ["CGGML"]),
+        .testTarget(name: "ggmlTests", dependencies: ["ggml"]),
     ],
     cLanguageStandard: .c11,
     cxxLanguageStandard: .cxx17
