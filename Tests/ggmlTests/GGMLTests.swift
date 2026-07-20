@@ -6,6 +6,34 @@ final class GGMLTests: XCTestCase {
         XCTAssertEqual(GGML.version, "0.16.0")
         XCTAssertEqual(GGML.commit, "524f974bb21a1013408f76d71c15732482c0c3fe")
     }
+
+    func testLogCallback() {
+        final class Sink: @unchecked Sendable {
+            private let lock = NSLock()
+            private var entries: [(LogLevel, String)] = []
+
+            func append(_ level: LogLevel, _ message: String) {
+                lock.lock()
+                entries.append((level, message))
+                lock.unlock()
+            }
+
+            var errors: [String] {
+                lock.lock()
+                defer { lock.unlock() }
+                return entries.filter { $0.0 == .error }.map(\.1)
+            }
+        }
+
+        let sink = Sink()
+        GGML.setLogCallback { level, message in sink.append(level, message) }
+        defer { GGML.setLogCallback(nil) }
+
+        // A failing GGUF load logs through GGML_LOG_ERROR.
+        XCTAssertThrowsError(try GGUF(path: "/nonexistent/model.gguf"))
+        XCTAssertFalse(sink.errors.isEmpty)
+        XCTAssertTrue(sink.errors.joined().contains("failed"))
+    }
 }
 
 /// Port of ggml's `examples/simple/simple-ctx.cpp`.
