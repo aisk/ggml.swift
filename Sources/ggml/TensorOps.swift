@@ -279,6 +279,43 @@ extension Tensor {
     }
 }
 
+/// Pooling operation for ``Tensor/pool1d(_:k0:s0:p0:)``. Mirrors `ggml_op_pool`.
+public enum PoolOp: Sendable {
+    case max
+    case avg
+
+    var cValue: ggml_op_pool {
+        switch self {
+        case .max: return GGML_OP_POOL_MAX
+        case .avg: return GGML_OP_POOL_AVG
+        }
+    }
+}
+
+extension Tensor {
+    // MARK: - Pooling
+
+    /// 1d pooling along the innermost dimension with kernel size `k0`,
+    /// stride `s0` and padding `p0`. Mirrors `ggml_pool_1d`.
+    public func pool1d(_ op: PoolOp, k0: Int, s0: Int, p0: Int = 0) -> Tensor {
+        wrap(ggml_pool_1d(context.rawValue, rawValue, op.cValue, Int32(k0), Int32(s0), Int32(p0)))
+    }
+
+    // MARK: - Graph flags
+
+    /// Marks the tensor as a graph input, so allocators keep its buffer
+    /// distinct and writable. Mirrors `ggml_set_input`.
+    public func setInput() {
+        ggml_set_input(rawValue)
+    }
+
+    /// Marks the tensor as a graph output, so allocators never reuse its
+    /// buffer for other nodes. Mirrors `ggml_set_output`.
+    public func setOutput() {
+        ggml_set_output(rawValue)
+    }
+}
+
 /// Sort direction for ``Tensor/argsort(order:)``. Mirrors `ggml_sort_order`.
 public enum SortOrder: Sendable {
     case asc
