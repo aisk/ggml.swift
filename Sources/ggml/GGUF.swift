@@ -25,7 +25,9 @@ public final class GGUF {
     ///
     /// - Parameter noAlloc: When true, the tensors in ``context`` carry
     ///   only metadata; their data must be allocated in backend buffers
-    ///   and read from the file separately.
+    ///   and read from the file separately — locate it with ``dataOffset``
+    ///   and ``tensorOffset(named:)``, then upload via
+    ///   ``Tensor/copy(from:)-(UnsafeRawBufferPointer)``.
     public init(path: String, noAlloc: Bool = false) throws {
         var dataContext: OpaquePointer?
         let raw = withUnsafeMutablePointer(to: &dataContext) { pointer in
@@ -75,6 +77,19 @@ public final class GGUF {
     public func add(_ tensor: Tensor) {
         gguf_add_tensor(rawValue, tensor.rawValue)
         addedTensors.append(tensor)
+    }
+
+    /// Byte offset of the tensor data section within the file.
+    /// Mirrors `gguf_get_data_offset`.
+    public var dataOffset: Int {
+        gguf_get_data_offset(rawValue)
+    }
+
+    /// Byte offset of a tensor's data relative to the start of the data
+    /// section (``dataOffset``). Mirrors `gguf_get_tensor_offset`.
+    public func tensorOffset(named name: String) -> Int? {
+        let id = gguf_find_tensor(rawValue, name)
+        return id >= 0 ? gguf_get_tensor_offset(rawValue, id) : nil
     }
 
     // MARK: - Metadata

@@ -149,6 +149,15 @@ public struct Tensor {
         }
     }
 
+    /// Copies raw bytes into the tensor's data without any conversion —
+    /// e.g. quantized blocks read straight from a GGUF file's data section.
+    /// The byte count must match the tensor's ``byteCount`` exactly.
+    public func copy(from bytes: UnsafeRawBufferPointer) {
+        precondition(bytes.count == byteCount,
+                     "byte count \(bytes.count) does not match tensor size \(byteCount)")
+        writeRaw(bytes)
+    }
+
     /// Copies `values` into the tensor's data.
     /// The tensor must be of type ``TensorType/i32``.
     ///
