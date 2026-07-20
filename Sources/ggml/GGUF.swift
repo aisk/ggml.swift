@@ -65,10 +65,16 @@ public final class GGUF {
         context?.tensor(named: name)
     }
 
-    /// Registers a tensor (metadata and data) to be written.
-    /// Mirrors `gguf_add_tensor`.
+    // Tensors registered for writing. `gguf_add_tensor` copies the
+    // `ggml_tensor` struct including its raw data pointer, so the sources
+    // (and thereby their contexts) must stay alive until `write(to:)`.
+    private var addedTensors: [Tensor] = []
+
+    /// Registers a tensor (metadata and data) to be written; the GGUF keeps
+    /// it alive until written. Mirrors `gguf_add_tensor`.
     public func add(_ tensor: Tensor) {
         gguf_add_tensor(rawValue, tensor.rawValue)
+        addedTensors.append(tensor)
     }
 
     // MARK: - Metadata

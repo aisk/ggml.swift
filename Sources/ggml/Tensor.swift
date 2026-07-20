@@ -20,10 +20,12 @@ public struct Tensor {
     ///
     /// Needed when the leading operand of an expression lives in a different
     /// context than the graph being built — typically weights loaded from a
-    /// ``GGUF`` file: `weights.within(graphContext).mulMat(x)`. The receiver's
-    /// own context must stay alive for as long as the result is used.
+    /// ``GGUF`` file: `weights.within(graphContext).mulMat(x)`. The target
+    /// context retains the receiver's own context, so the underlying storage
+    /// stays alive for as long as the graph does.
     public func within(_ context: Context) -> Tensor {
-        Tensor(rawValue: rawValue, context: context)
+        context.retain(self.context)
+        return Tensor(rawValue: rawValue, context: context)
     }
 
     /// Element type of the tensor.
@@ -182,13 +184,25 @@ public struct Tensor {
         }
     }
 
-    /// Raw read-only access to the tensor's data buffer.
-    public func withUnsafeBytes<R>(_ body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R {
-        try body(UnsafeRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
+    // Backend buffers may live in device memory, where `data` is not a
+    // dereferenceable CPU address (`ggml_backend_buffer_is_host` is false).
+    private var isHostAccessible: Bool {
+        rawValue.pointee.buffer.map { ggml_backend_buffer_is_host($0) } ?? true
     }
 
-    /// Raw mutable access to the tensor's data buffer.
+    /// Raw read-only access to the tensor's data buffer. Only valid for
+    /// host-resident data; for device tensors use ``floats()``.
+    public func withUnsafeBytes<R>(_ body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R {
+        precondition(isHostAccessible,
+                     "raw access requires host-resident data; use floats() for device tensors")
+        return try body(UnsafeRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
+    }
+
+    /// Raw mutable access to the tensor's data buffer. Only valid for
+    /// host-resident data; for device tensors use ``copy(from:)``.
     public func withUnsafeMutableBytes<R>(_ body: (UnsafeMutableRawBufferPointer) throws -> R) rethrows -> R {
-        try body(UnsafeMutableRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
+        precondition(isHostAccessible,
+                     "raw access requires host-resident data; use copy(from:) for device tensors")
+        return try body(UnsafeMutableRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
     }
 }

@@ -264,6 +264,49 @@ final class GGUFTests: XCTestCase {
         XCTAssertEqual(logits.floats(), [8.5, 5.5])
     }
 
+    func testGraphRetainsWeightContexts() throws {
+        try writeModel()
+
+        let compute = try Context(memorySize: 1024 * 1024)
+        let x = compute.tensor(.f32, 4)
+        x.copy(from: [1, 2, 3, 4])
+
+        // Drop the GGUF (and the context owning the weights) before
+        // computing; within(_:) and the recorded operations must keep the
+        // weight storage alive.
+        let logits: Tensor
+        do {
+            let gguf = try GGUF(path: path)
+            let fc1Weight = try XCTUnwrap(gguf.tensor(named: "fc1.weight"))
+            let fc1Bias = try XCTUnwrap(gguf.tensor(named: "fc1.bias"))
+            let fc2Weight = try XCTUnwrap(gguf.tensor(named: "fc2.weight"))
+            let fc2Bias = try XCTUnwrap(gguf.tensor(named: "fc2.bias"))
+            let hidden = fc1Weight.within(compute).mulMat(x).add(fc1Bias).relu()
+            logits = fc2Weight.within(compute).mulMat(hidden).add(fc2Bias)
+        }
+
+        let graph = compute.graph()
+        graph.buildForwardExpand(logits)
+        try graph.compute()
+
+        XCTAssertEqual(logits.floats(), [8.5, 5.5])
+    }
+
+    func testAddedTensorsSurviveSourceRelease() throws {
+        let gguf = GGUF()
+        do {
+            let context = try Context(memorySize: 1024 * 1024)
+            let weight = context.tensor(.f32, 4)
+            weight.name = "w"
+            weight.copy(from: [1, 2, 3, 4])
+            gguf.add(weight)
+        }
+        try gguf.write(to: path)
+
+        let loaded = try GGUF(path: path)
+        XCTAssertEqual(try XCTUnwrap(loaded.tensor(named: "w")).floats(), [1, 2, 3, 4])
+    }
+
     func testLoadFailureThrows() {
         XCTAssertThrowsError(try GGUF(path: "/nonexistent/model.gguf")) { error in
             XCTAssertEqual(error as? GGMLError,

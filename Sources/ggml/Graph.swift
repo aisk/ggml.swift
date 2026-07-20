@@ -43,7 +43,8 @@ public final class Graph {
     /// graph's own context. Mirrors `ggml_graph_compute_with_ctx`.
     ///
     /// This is the legacy compute path (tensor data lives in the context);
-    /// backend-based computation will be added in a later step.
+    /// for backend-based computation use ``Backend/compute(_:)`` or a
+    /// ``Scheduler``.
     public func compute(threads: Int = 1) throws {
         let status = Status(cValue: ggml_graph_compute_with_ctx(context.rawValue, rawValue, Int32(threads)))
         guard status == .success else {

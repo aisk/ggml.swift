@@ -12,6 +12,17 @@ public final class Context {
     // so the data outlives neither the context nor its tensors.
     var retainedBuffers: [BackendBuffer] = []
 
+    // Contexts owning the storage of tensors that feed operations recorded
+    // in this context; retained so cross-context source data (e.g. weights
+    // loaded from a GGUF file) outlives the graphs built here.
+    var retainedContexts: [Context] = []
+
+    func retain(_ source: Context) {
+        if source !== self && !retainedContexts.contains(where: { $0 === source }) {
+            retainedContexts.append(source)
+        }
+    }
+
     /// Creates a context backed by an internally allocated arena of
     /// `memorySize` bytes. Mirrors `ggml_init`.
     ///

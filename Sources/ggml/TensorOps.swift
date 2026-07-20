@@ -7,31 +7,37 @@ import CGGML
 // camelCase — `ggml_mul_mat` → `mulMat`, `ggml_soft_max` → `softMax`.
 // Parameter labels follow the upstream parameter names the same way.
 extension Tensor {
-    private func wrap(_ result: UnsafeMutablePointer<ggml_tensor>?) -> Tensor {
-        Tensor(rawValue: result!, context: context)
+    // Additional source operands are passed through so that the recording
+    // context retains their contexts — cross-context sources (e.g. GGUF
+    // weights) must not be freed while the graph can still read them.
+    private func wrap(_ result: UnsafeMutablePointer<ggml_tensor>?, _ sources: Tensor?...) -> Tensor {
+        for case let source? in sources {
+            context.retain(source.context)
+        }
+        return Tensor(rawValue: result!, context: context)
     }
 
     // MARK: - Arithmetic
 
     /// Element-wise addition (`b` is broadcast). Mirrors `ggml_add`.
     public func add(_ b: Tensor) -> Tensor {
-        wrap(ggml_add(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_add(context.rawValue, rawValue, b.rawValue), b)
     }
 
     /// Element-wise subtraction (`b` is broadcast). Mirrors `ggml_sub`.
     public func sub(_ b: Tensor) -> Tensor {
-        wrap(ggml_sub(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_sub(context.rawValue, rawValue, b.rawValue), b)
     }
 
     /// Element-wise multiplication (`b` is broadcast). Mirrors `ggml_mul`.
     /// For matrix multiplication use ``mulMat(_:)``.
     public func mul(_ b: Tensor) -> Tensor {
-        wrap(ggml_mul(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_mul(context.rawValue, rawValue, b.rawValue), b)
     }
 
     /// Element-wise division (`b` is broadcast). Mirrors `ggml_div`.
     public func div(_ b: Tensor) -> Tensor {
-        wrap(ggml_div(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_div(context.rawValue, rawValue, b.rawValue), b)
     }
 
     /// Multiplies every element by `s`. Mirrors `ggml_scale`.
@@ -45,7 +51,7 @@ extension Tensor {
     /// matrices A `(n×k)` and B `(m×k)`, the result is `(m×n)` — i.e.
     /// `result[i][j] = dot(A[j], B[i])`.
     public func mulMat(_ b: Tensor) -> Tensor {
-        wrap(ggml_mul_mat(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_mul_mat(context.rawValue, rawValue, b.rawValue), b)
     }
 
     // MARK: - Activations
@@ -111,7 +117,7 @@ extension Tensor {
 
     /// Returns a view with the same shape as `other`. Mirrors `ggml_reshape`.
     public func reshape(like other: Tensor) -> Tensor {
-        wrap(ggml_reshape(context.rawValue, rawValue, other.rawValue))
+        wrap(ggml_reshape(context.rawValue, rawValue, other.rawValue), other)
     }
 
     /// Returns a view with the axes reordered; axis `i` of the result maps
@@ -244,18 +250,18 @@ extension Tensor {
     /// Gathers rows by index; the receiver is the table (`[n_embd, n_rows]`)
     /// and `b` holds i32 row indices. Mirrors `ggml_get_rows`.
     public func getRows(_ b: Tensor) -> Tensor {
-        wrap(ggml_get_rows(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_get_rows(context.rawValue, rawValue, b.rawValue), b)
     }
 
     /// Repeats the tensor to fit the shape of `other`. Mirrors `ggml_repeat`
     /// (named `repeated` because `repeat` is a Swift keyword).
     public func repeated(like other: Tensor) -> Tensor {
-        wrap(ggml_repeat(context.rawValue, rawValue, other.rawValue))
+        wrap(ggml_repeat(context.rawValue, rawValue, other.rawValue), other)
     }
 
     /// Concatenates `b` along the given dimension. Mirrors `ggml_concat`.
     public func concat(_ b: Tensor, dim: Int) -> Tensor {
-        wrap(ggml_concat(context.rawValue, rawValue, b.rawValue, Int32(dim)))
+        wrap(ggml_concat(context.rawValue, rawValue, b.rawValue, Int32(dim)), b)
     }
 
     // MARK: - Attention building blocks
@@ -269,7 +275,7 @@ extension Tensor {
     /// Rotary position embedding. The receiver is `[head_dim, n_head,
     /// n_tokens]` and `b` holds i32 positions per token. Mirrors `ggml_rope`.
     public func rope(_ b: Tensor, nDims: Int, mode: RopeMode = .normal) -> Tensor {
-        wrap(ggml_rope(context.rawValue, rawValue, b.rawValue, Int32(nDims), mode.rawValue))
+        wrap(ggml_rope(context.rawValue, rawValue, b.rawValue, Int32(nDims), mode.rawValue), b)
     }
 }
 
@@ -318,7 +324,7 @@ extension Tensor {
     /// Copies the receiver into `b` (which may be a view, e.g. a KV cache
     /// slot) and returns a view of `b`. Mirrors `ggml_cpy`.
     public func cpy(to b: Tensor) -> Tensor {
-        wrap(ggml_cpy(context.rawValue, rawValue, b.rawValue))
+        wrap(ggml_cpy(context.rawValue, rawValue, b.rawValue), b)
     }
 
     /// Converts the tensor to another element type. Mirrors `ggml_cast`.
@@ -329,13 +335,13 @@ extension Tensor {
     /// Returns a copy of the receiver with `b` written at `offset` bytes,
     /// treating the data as flat. Mirrors `ggml_set_1d`.
     public func set(_ b: Tensor, offset: Int) -> Tensor {
-        wrap(ggml_set_1d(context.rawValue, rawValue, b.rawValue, offset))
+        wrap(ggml_set_1d(context.rawValue, rawValue, b.rawValue, offset), b)
     }
 
     /// Returns a copy of the receiver with `b` written as a strided block
     /// at `offset` bytes. Mirrors `ggml_set`.
     public func set(_ b: Tensor, nb1: Int, nb2: Int, nb3: Int, offset: Int) -> Tensor {
-        wrap(ggml_set(context.rawValue, rawValue, b.rawValue, nb1, nb2, nb3, offset))
+        wrap(ggml_set(context.rawValue, rawValue, b.rawValue, nb1, nb2, nb3, offset), b)
     }
 
     // MARK: - Attention
@@ -343,7 +349,7 @@ extension Tensor {
     /// Fused scaled masked softmax: `softMax(self * scale + mask)`, with
     /// optional ALiBi bias. Mirrors `ggml_soft_max_ext`.
     public func softMaxExt(mask: Tensor? = nil, scale: Float = 1, maxBias: Float = 0) -> Tensor {
-        wrap(ggml_soft_max_ext(context.rawValue, rawValue, mask?.rawValue, scale, maxBias))
+        wrap(ggml_soft_max_ext(context.rawValue, rawValue, mask?.rawValue, scale, maxBias), mask)
     }
 
     /// Fused attention: `softMax(self · kᵀ * scale + mask) · v`, where the
@@ -358,7 +364,8 @@ extension Tensor {
         logitSoftcap: Float = 0
     ) -> Tensor {
         wrap(ggml_flash_attn_ext(context.rawValue, rawValue, k.rawValue, v.rawValue,
-                                 mask?.rawValue, scale, maxBias, logitSoftcap))
+                                 mask?.rawValue, scale, maxBias, logitSoftcap),
+             k, v, mask)
     }
 
     // MARK: - Sorting
