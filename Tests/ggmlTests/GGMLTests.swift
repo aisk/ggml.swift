@@ -291,7 +291,8 @@ final class GGUFTests: XCTestCase {
 final class BackendBufferTests: XCTestCase {
     func testAllocTensorsAndCompute() throws {
         let cpu = try XCTUnwrap(Backend(type: .cpu))
-        cpu.cpuSetNThreads(2)
+        XCTAssertEqual(cpu.device?.type, .cpu)
+        cpu.setThreadCount(2)
 
         let graph = Graph()
         let a = graph.tensor(.f32, 2, 4)

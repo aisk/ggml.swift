@@ -85,10 +85,18 @@ public final class Backend {
         }
     }
 
-    /// Sets the number of threads a CPU backend computes with. Must only
-    /// be called on a CPU backend. Mirrors `ggml_backend_cpu_set_n_threads`.
-    public func cpuSetNThreads(_ nThreads: Int) {
-        ggml_backend_cpu_set_n_threads(rawValue, Int32(nThreads))
+    /// The registry device this backend runs on, if it reports one.
+    /// Mirrors `ggml_backend_get_device`.
+    public var device: Device? {
+        ggml_backend_get_device(rawValue).map(Device.init(rawValue:))
+    }
+
+    /// Sets the number of threads the backend computes with. Only CPU
+    /// backends support this. Mirrors `ggml_backend_cpu_set_n_threads`.
+    public func setThreadCount(_ threads: Int) {
+        precondition(device?.type == .cpu,
+                     "setThreadCount(_:) is only supported by CPU backends, not '\(name)'")
+        ggml_backend_cpu_set_n_threads(rawValue, Int32(threads))
     }
 }
 
