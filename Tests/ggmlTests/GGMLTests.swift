@@ -55,6 +55,23 @@ final class GraphTests: XCTestCase {
         XCTAssertEqual(graph.nodeCount, 0)
         XCTAssertNil(graph.output)
     }
+
+    func testOutputsTrackBuiltTensors() {
+        let graph = Graph()
+        let a = graph.tensor(.f32, 2)
+        let b = graph.tensor(.f32, 2)
+
+        let sum = a.add(b)
+        graph.buildForwardExpand(sum)
+        XCTAssertEqual(graph.output?.rawValue, sum.rawValue)
+        XCTAssertEqual(graph.outputs.map(\.rawValue), [sum.rawValue])
+
+        // A second output makes the single `output` ambiguous.
+        let product = a.mul(b)
+        graph.buildForwardExpand(product)
+        XCTAssertNil(graph.output)
+        XCTAssertEqual(graph.outputs.map(\.rawValue), [sum.rawValue, product.rawValue])
+    }
 }
 
 /// Port of ggml's `examples/simple/simple-backend.cpp`.

@@ -58,17 +58,22 @@ public final class Graph {
         Tensor(rawValue: ggml_graph_node(rawValue, Int32(index)), context: context)
     }
 
-    /// The last node of the graph — for a single-output graph this is the
-    /// result tensor. `nil` for an empty graph.
-    public var output: Tensor? {
-        nodeCount > 0 ? node(-1) : nil
-    }
-
     // Tensors passed to buildForwardExpand. Besides being the graph's
     // logical outputs, they transitively retain the storage arenas (e.g.
     // GGUF weights) their expressions read from, so computing the graph
     // can never touch freed memory.
     var roots: [Tensor] = []
+
+    /// The tensors the graph was built to compute — one per
+    /// ``buildForwardExpand(_:)`` call, in order.
+    public var outputs: [Tensor] { roots }
+
+    /// The single tensor the graph was built to compute; `nil` when the
+    /// graph is empty or was built for several outputs — read ``outputs``
+    /// then.
+    public var output: Tensor? {
+        roots.count == 1 ? roots[0] : nil
+    }
 
     /// Expands the graph with the operations needed to compute `tensor`.
     /// Mirrors `ggml_build_forward_expand`.
