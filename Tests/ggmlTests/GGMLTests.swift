@@ -36,59 +36,11 @@ final class GGMLTests: XCTestCase {
     }
 }
 
-/// Port of ggml's `examples/simple/simple-ctx.cpp`.
-final class SimpleContextTests: XCTestCase {
-    func testMatMul() throws {
-        let rowsA = 4, colsA = 2
-        let matrixA: [Float] = [
-            2, 8,
-            5, 1,
-            4, 2,
-            8, 6,
-        ]
+final class GraphTests: XCTestCase {
+    func testTensorMetadata() {
+        let graph = Graph()
 
-        let rowsB = 3, colsB = 2
-        // Transpose([10, 9, 5,
-        //            5, 9, 4])
-        let matrixB: [Float] = [
-            10, 5,
-            9, 9,
-            5, 4,
-        ]
-
-        var contextSize = 0
-        contextSize += rowsA * colsA * TensorType.f32.size
-        contextSize += rowsB * colsB * TensorType.f32.size
-        contextSize += 2 * Context.tensorOverhead
-        contextSize += Context.graphOverhead
-        contextSize += 1024 // some overhead
-
-        let context = try Context(memorySize: contextSize)
-
-        let a = context.tensor(.f32, colsA, rowsA)
-        let b = context.tensor(.f32, colsB, rowsB)
-        a.copy(from: matrixA)
-        b.copy(from: matrixB)
-
-        let graph = context.graph()
-        let result = a.mulMat(b)
-        graph.buildForwardExpand(result)
-        try graph.compute(threads: 1)
-
-        XCTAssertEqual(graph.output?.rawValue, result.rawValue)
-        XCTAssertEqual(result.type, .f32)
-        XCTAssertEqual(result.shape, [rowsA, rowsB])
-        XCTAssertEqual(result.floats(), [
-            60, 55, 50, 110,
-            90, 54, 54, 126,
-            42, 29, 28, 64,
-        ])
-    }
-
-    func testTensorMetadata() throws {
-        let context = try Context(memorySize: 16 * 1024)
-
-        let tensor = context.tensor(.f32, 3, 2)
+        let tensor = graph.tensor(.f32, 3, 2)
         tensor.name = "weights"
 
         XCTAssertEqual(tensor.type, .f32)
@@ -98,7 +50,10 @@ final class SimpleContextTests: XCTestCase {
         XCTAssertEqual(tensor.elementCount, 6)
         XCTAssertEqual(tensor.byteCount, 6 * MemoryLayout<Float>.size)
         XCTAssertEqual(tensor.name, "weights")
-        XCTAssertGreaterThan(context.usedMemory, 0)
+        XCTAssertFalse(tensor.isAllocated)
+
+        XCTAssertEqual(graph.nodeCount, 0)
+        XCTAssertNil(graph.output)
     }
 }
 
@@ -111,21 +66,18 @@ final class SimpleBackendTests: XCTestCase {
         let cpu = try XCTUnwrap(Backend(type: .cpu))
         let scheduler = Scheduler(backends: [best, cpu])
 
-        // The context only holds tensor metadata and the graph; tensor data
-        // is allocated in backend buffers by the scheduler.
-        let contextSize = Context.tensorOverhead * Graph.defaultSize + Context.graphOverhead
-        let context = try Context(memorySize: contextSize, noAlloc: true)
+        // The graph's arena only holds tensor metadata; tensor data is
+        // allocated in backend buffers by the scheduler.
+        let graph = Graph()
 
-        let a = context.tensor(.f32, 2, 4)
-        let b = context.tensor(.f32, 2, 3)
+        let a = graph.tensor(.f32, 2, 4)
+        let b = graph.tensor(.f32, 2, 3)
         let result = a.mulMat(b)
-
-        let graph = context.graph()
         graph.buildForwardExpand(result)
 
         scheduler.reset()
         XCTAssertTrue(scheduler.allocGraph(graph))
-        XCTAssertTrue(a.isBackendAllocated)
+        XCTAssertTrue(a.isAllocated)
 
         a.copy(from: [
             2, 8,
@@ -141,6 +93,8 @@ final class SimpleBackendTests: XCTestCase {
 
         try scheduler.compute(graph)
 
+        XCTAssertEqual(graph.output?.rawValue, result.rawValue)
+        XCTAssertEqual(result.type, .f32)
         XCTAssertEqual(result.shape, [4, 3])
         XCTAssertEqual(result.floats(), [
             60, 55, 50, 110,
@@ -162,50 +116,38 @@ final class SimpleBackendTests: XCTestCase {
 /// a miniature of ggml's `examples/mnist` eval path.
 final class GGUFTests: XCTestCase {
     private var path: String!
+    private var cpu: Backend!
 
-    override func setUp() {
+    override func setUpWithError() throws {
+        cpu = try XCTUnwrap(Backend(type: .cpu))
         path = FileManager.default.temporaryDirectory
             .appendingPathComponent("ggml-swift-test-\(UUID().uuidString).gguf").path
     }
 
     override func tearDown() {
         try? FileManager.default.removeItem(atPath: path)
+        cpu = nil
     }
 
     private func writeModel() throws {
-        let context = try Context(memorySize: 1024 * 1024)
-
-        // A 4 -> 3 -> 2 fully connected network with hand-picked weights.
-        let fc1Weight = context.tensor(.f32, 4, 3)
-        fc1Weight.name = "fc1.weight"
-        fc1Weight.copy(from: [
-            1, 0, 0, 0,
-            0, 1, 0, 0,
-            0, 0, 1, 1,
-        ])
-        let fc1Bias = context.tensor(.f32, 3)
-        fc1Bias.name = "fc1.bias"
-        fc1Bias.copy(from: [0, -3, 0])
-
-        let fc2Weight = context.tensor(.f32, 3, 2)
-        fc2Weight.name = "fc2.weight"
-        fc2Weight.copy(from: [
-            1, 1, 1,
-            -1, 0, 1,
-        ])
-        let fc2Bias = context.tensor(.f32, 2)
-        fc2Bias.name = "fc2.bias"
-        fc2Bias.copy(from: [0.5, -0.5])
-
         let gguf = GGUF()
         gguf.set("mnist-fc", forKey: "general.architecture")
         gguf.set(3, forKey: "test.epochs")
         gguf.set(0.05, forKey: "test.learning_rate")
         gguf.set(true, forKey: "test.trained")
-        gguf.add(fc1Weight)
-        gguf.add(fc1Bias)
-        gguf.add(fc2Weight)
-        gguf.add(fc2Bias)
+
+        // A 4 -> 3 -> 2 fully connected network with hand-picked weights.
+        gguf.tensor(.f32, 4, 3, named: "fc1.weight").copy(from: [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 1,
+        ])
+        gguf.tensor(.f32, 3, named: "fc1.bias").copy(from: [0, -3, 0])
+        gguf.tensor(.f32, 3, 2, named: "fc2.weight").copy(from: [
+            1, 1, 1,
+            -1, 0, 1,
+        ])
+        gguf.tensor(.f32, 2, named: "fc2.bias").copy(from: [0.5, -0.5])
         try gguf.write(to: path)
     }
 
@@ -227,8 +169,13 @@ final class GGUFTests: XCTestCase {
         XCTAssertEqual(Set(gguf.tensorNames),
                        ["fc1.weight", "fc1.bias", "fc2.weight", "fc2.bias"])
 
+        // Before load(on:) the tensors carry only metadata.
         let fc1Weight = try XCTUnwrap(gguf.tensor(named: "fc1.weight"))
         XCTAssertEqual(fc1Weight.shape, [4, 3])
+        XCTAssertFalse(fc1Weight.isAllocated)
+
+        try gguf.load(on: cpu)
+        XCTAssertTrue(fc1Weight.isAllocated)
         XCTAssertEqual(fc1Weight.floats(), [
             1, 0, 0, 0,
             0, 1, 0, 0,
@@ -241,23 +188,23 @@ final class GGUFTests: XCTestCase {
         try writeModel()
 
         let gguf = try GGUF(path: path)
+        try gguf.load(on: cpu)
         let fc1Weight = try XCTUnwrap(gguf.tensor(named: "fc1.weight"))
         let fc1Bias = try XCTUnwrap(gguf.tensor(named: "fc1.bias"))
         let fc2Weight = try XCTUnwrap(gguf.tensor(named: "fc2.weight"))
         let fc2Bias = try XCTUnwrap(gguf.tensor(named: "fc2.bias"))
 
-        // Build and run the eval graph in a separate compute context; the
-        // loaded weights participate via within(_:).
-        let compute = try Context(memorySize: 1024 * 1024)
-        let x = compute.tensor(.f32, 4)
-        x.copy(from: [1, 2, 3, 4])
+        // Build the eval graph; the loaded weights join via within(_:).
+        let graph = Graph()
+        let x = graph.tensor(.f32, 4)
 
-        let hidden = fc1Weight.within(compute).mulMat(x).add(fc1Bias).relu()
-        let logits = fc2Weight.within(compute).mulMat(hidden).add(fc2Bias)
-
-        let graph = compute.graph()
+        let hidden = fc1Weight.within(graph).mulMat(x).add(fc1Bias).relu()
+        let logits = fc2Weight.within(graph).mulMat(hidden).add(fc2Bias)
         graph.buildForwardExpand(logits)
-        try graph.compute()
+
+        try graph.allocTensors(on: cpu)
+        x.copy(from: [1, 2, 3, 4])
+        try cpu.compute(graph)
 
         // fc1: [1, 2, 7] + [0, -3, 0] -> relu -> [1, 0, 7]
         // fc2: [8, 6] + [0.5, -0.5] -> [8.5, 5.5]
@@ -267,43 +214,48 @@ final class GGUFTests: XCTestCase {
     func testGraphRetainsWeightContexts() throws {
         try writeModel()
 
-        let compute = try Context(memorySize: 1024 * 1024)
-        let x = compute.tensor(.f32, 4)
-        x.copy(from: [1, 2, 3, 4])
+        let graph = Graph()
+        let x = graph.tensor(.f32, 4)
 
-        // Drop the GGUF (and the context owning the weights) before
+        // Drop the GGUF (and the arena owning the weights) before
         // computing; within(_:) and the recorded operations must keep the
         // weight storage alive.
         let logits: Tensor
         do {
             let gguf = try GGUF(path: path)
+            try gguf.load(on: cpu)
             let fc1Weight = try XCTUnwrap(gguf.tensor(named: "fc1.weight"))
             let fc1Bias = try XCTUnwrap(gguf.tensor(named: "fc1.bias"))
             let fc2Weight = try XCTUnwrap(gguf.tensor(named: "fc2.weight"))
             let fc2Bias = try XCTUnwrap(gguf.tensor(named: "fc2.bias"))
-            let hidden = fc1Weight.within(compute).mulMat(x).add(fc1Bias).relu()
-            logits = fc2Weight.within(compute).mulMat(hidden).add(fc2Bias)
+            let hidden = fc1Weight.within(graph).mulMat(x).add(fc1Bias).relu()
+            logits = fc2Weight.within(graph).mulMat(hidden).add(fc2Bias)
         }
 
-        let graph = compute.graph()
         graph.buildForwardExpand(logits)
-        try graph.compute()
+        try graph.allocTensors(on: cpu)
+        x.copy(from: [1, 2, 3, 4])
+        try cpu.compute(graph)
 
         XCTAssertEqual(logits.floats(), [8.5, 5.5])
     }
 
     func testAddedTensorsSurviveSourceRelease() throws {
+        // A backend-allocated tensor registered via add(_:) must stay
+        // alive (and readable by the writer) after its graph is released.
         let gguf = GGUF()
         do {
-            let context = try Context(memorySize: 1024 * 1024)
-            let weight = context.tensor(.f32, 4)
+            let graph = Graph()
+            let weight = graph.tensor(.f32, 4)
             weight.name = "w"
+            try graph.allocTensors(on: cpu)
             weight.copy(from: [1, 2, 3, 4])
             gguf.add(weight)
         }
         try gguf.write(to: path)
 
         let loaded = try GGUF(path: path)
+        try loaded.load(on: cpu)
         XCTAssertEqual(try XCTUnwrap(loaded.tensor(named: "w")).floats(), [1, 2, 3, 4])
     }
 
@@ -316,27 +268,27 @@ final class GGUFTests: XCTestCase {
 }
 
 /// Explicit backend-buffer allocation and direct backend compute — the
-/// pattern used to place model weights on a device.
+/// single-backend alternative to a ``Scheduler``.
 final class BackendBufferTests: XCTestCase {
     func testAllocTensorsAndCompute() throws {
         let cpu = try XCTUnwrap(Backend(type: .cpu))
         cpu.cpuSetNThreads(2)
 
-        let contextSize = Context.tensorOverhead * Graph.defaultSize + Context.graphOverhead
-        let context = try Context(memorySize: contextSize, noAlloc: true)
-
-        let a = context.tensor(.f32, 2, 4)
-        let b = context.tensor(.f32, 2, 3)
+        let graph = Graph()
+        let a = graph.tensor(.f32, 2, 4)
+        let b = graph.tensor(.f32, 2, 3)
         let result = a.mulMat(b)
-        let graph = context.graph()
         graph.buildForwardExpand(result)
 
-        // Allocates every tensor in the context — weights, inputs and
-        // intermediate results alike — in one buffer on the backend.
-        let buffer = try context.allocTensors(on: cpu)
+        // Allocates every tensor in the graph — inputs and intermediate
+        // results alike — in one buffer on the backend.
+        let buffer = try XCTUnwrap(graph.allocTensors(on: cpu))
         XCTAssertGreaterThan(buffer.size, 0)
         XCTAssertFalse(buffer.name.isEmpty)
-        XCTAssertTrue(a.isBackendAllocated)
+        XCTAssertTrue(a.isAllocated)
+
+        // A second call has nothing left to allocate.
+        XCTAssertNil(try graph.allocTensors(on: cpu))
 
         a.copy(from: [2, 8, 5, 1, 4, 2, 8, 6])
         b.copy(from: [10, 5, 9, 9, 5, 4])
@@ -365,28 +317,46 @@ final class BackendBufferTests: XCTestCase {
 }
 
 final class TensorOpsTests: XCTestCase {
-    private var context: Context!
+    private var cpu: Backend!
+    private var graph: Graph!
 
     override func setUpWithError() throws {
-        context = try Context(memorySize: 16 * 1024 * 1024)
+        cpu = try XCTUnwrap(Backend(type: .cpu))
+        graph = Graph()
     }
 
     override func tearDown() {
-        context = nil
+        graph = nil
+        cpu = nil
     }
 
-    /// Computes the graph for `tensor` on the CPU and returns its values.
-    private func evaluate(_ tensor: Tensor) throws -> [Float] {
-        let graph = context.graph()
+    /// Creates a leaf tensor allocated on the CPU backend, filled with
+    /// `values` (a flat array of `shape.count` elements when given).
+    private func tensor(_ values: [Float], type: TensorType = .f32, shape: [Int]? = nil) -> Tensor {
+        let tensor = graph.tensor(type, shape: shape ?? [values.count])
+        try! graph.allocTensors(on: cpu)
+        tensor.copy(from: values)
+        return tensor
+    }
+
+    private func tensor(int32 values: [Int32], shape: [Int]? = nil) -> Tensor {
+        let tensor = graph.tensor(.i32, shape: shape ?? [values.count])
+        try! graph.allocTensors(on: cpu)
+        tensor.copy(from: values)
+        return tensor
+    }
+
+    /// Computes the graph up to `tensor` on the CPU backend.
+    private func run(_ tensor: Tensor) throws {
         graph.buildForwardExpand(tensor)
-        try graph.compute()
-        return tensor.floats()
+        try graph.allocTensors(on: cpu)
+        try cpu.compute(graph)
     }
 
-    private func tensor(_ values: [Float]) -> Tensor {
-        let t = context.tensor(.f32, values.count)
-        t.copy(from: values)
-        return t
+    /// Computes the graph for `tensor` and returns its values.
+    private func evaluate(_ tensor: Tensor) throws -> [Float] {
+        try run(tensor)
+        return tensor.floats()
     }
 
     func testArithmetic() throws {
@@ -436,8 +406,7 @@ final class TensorOpsTests: XCTestCase {
 
     func testShapeOps() throws {
         // Row-major 2x3 matrix (3 columns, 2 rows): [1 2 3; 4 5 6]
-        let m = context.tensor(.f32, 3, 2)
-        m.copy(from: [1, 2, 3, 4, 5, 6])
+        let m = tensor([1, 2, 3, 4, 5, 6], shape: [3, 2])
 
         XCTAssertEqual(m.transpose().shape, [2, 3])
         XCTAssertEqual(m.permute(1, 0, 2, 3).shape, [2, 3])
@@ -474,44 +443,37 @@ final class TensorOpsTests: XCTestCase {
         XCTAssertEqual(try evaluate(tensor([1, 2, 3, 4]).sum()), [10])
 
         // [1 2 3; 4 5 6] as a 3-column, 2-row matrix.
-        let m = context.tensor(.f32, 3, 2)
-        m.copy(from: [1, 2, 3, 4, 5, 6])
+        let m = tensor([1, 2, 3, 4, 5, 6], shape: [3, 2])
 
         let rowSums = m.sumRows()
         XCTAssertEqual(try evaluate(rowSums), [6, 15])
         XCTAssertEqual(rowSums.shape, [1, 2])
         XCTAssertEqual(try evaluate(m.mean()), [2, 5])
 
-        let peaks = context.tensor(.f32, 3, 2)
-        peaks.copy(from: [1, 5, 3, 9, 2, 4])
+        let peaks = tensor([1, 5, 3, 9, 2, 4], shape: [3, 2])
         let indices = peaks.argmax()
-        let graph = context.graph()
-        graph.buildForwardExpand(indices)
-        try graph.compute()
+        try run(indices)
         XCTAssertEqual(indices.type, .i32)
         XCTAssertEqual(indices.int32s(), [1, 0])
     }
 
     func testDataMovement() throws {
         // Embedding-style row gather.
-        let table = context.tensor(.f32, 3, 2)
-        table.copy(from: [1, 2, 3, 4, 5, 6])
-        let ids = context.tensor(.i32, 3)
-        ids.copy(from: [1, 0, 1] as [Int32])
+        let table = tensor([1, 2, 3, 4, 5, 6], shape: [3, 2])
+        let ids = tensor(int32: [1, 0, 1])
         let gathered = table.getRows(ids)
         XCTAssertEqual(try evaluate(gathered), [4, 5, 6, 1, 2, 3, 4, 5, 6])
         XCTAssertEqual(gathered.shape, [3, 3])
 
         let pattern = tensor([1, 2])
-        let target = context.tensor(.f32, 2, 2)
+        let target = graph.tensor(.f32, 2, 2)
         XCTAssertEqual(try evaluate(pattern.repeated(like: target)), [1, 2, 1, 2])
 
         XCTAssertEqual(try evaluate(tensor([1, 2]).concat(tensor([3]), dim: 0)), [1, 2, 3])
     }
 
     func testCausalMask() throws {
-        let scores = context.tensor(.f32, 3, 3)
-        scores.copy(from: [Float](repeating: 1, count: 9))
+        let scores = tensor([Float](repeating: 1, count: 9), shape: [3, 3])
 
         let masked = try evaluate(scores.diagMaskInf(nPast: 0))
         XCTAssertEqual(masked[0], 1)
@@ -525,18 +487,15 @@ final class TensorOpsTests: XCTestCase {
 
     func testRope() throws {
         // [head_dim = 4, n_head = 1, n_tokens = 2]
-        let q = context.tensor(.f32, 4, 1, 2)
         let values: [Float] = [1, 2, 3, 4, 5, 6, 7, 8]
-        q.copy(from: values)
+        let q = tensor(values, shape: [4, 1, 2])
 
         // At position 0 the rotation is the identity.
-        let zeros = context.tensor(.i32, 2)
-        zeros.copy(from: [0, 0] as [Int32])
+        let zeros = tensor(int32: [0, 0])
         XCTAssertEqual(try evaluate(q.rope(zeros, nDims: 4)), values)
 
         // A non-zero position rotates the second token.
-        let positions = context.tensor(.i32, 2)
-        positions.copy(from: [0, 1] as [Int32])
+        let positions = tensor(int32: [0, 1])
         let rotated = try evaluate(q.rope(positions, nDims: 4))
         XCTAssertEqual(Array(rotated[0..<4]), [1, 2, 3, 4])
         XCTAssertNotEqual(Array(rotated[4...]), [5, 6, 7, 8])
@@ -550,8 +509,7 @@ final class TensorOpsTests: XCTestCase {
         XCTAssertEqual(try evaluate(slice.cont()), [3, 4])
 
         // Top-left 2x2 block of [1 2 3; 4 5 6].
-        let m = context.tensor(.f32, 3, 2)
-        m.copy(from: [1, 2, 3, 4, 5, 6])
+        let m = tensor([1, 2, 3, 4, 5, 6], shape: [3, 2])
         let block = m.view(2, 2, nb1: m.strides[1], offset: 0)
         XCTAssertEqual(try evaluate(block.cont()), [1, 2, 4, 5])
     }
@@ -562,9 +520,7 @@ final class TensorOpsTests: XCTestCase {
         let entry = tensor([7, 8])
         let slot = cache.view(2, offset: 2 * MemoryLayout<Float>.size)
 
-        let graph = context.graph()
-        graph.buildForwardExpand(entry.cpy(to: slot))
-        try graph.compute()
+        try run(entry.cpy(to: slot))
         XCTAssertEqual(cache.floats(), [0, 0, 7, 8, 0, 0])
 
         XCTAssertEqual(
@@ -588,15 +544,11 @@ final class TensorOpsTests: XCTestCase {
 
     func testSorting() throws {
         let indices = tensor([3, 1, 2]).argsort(order: .asc)
-        let graph = context.graph()
-        graph.buildForwardExpand(indices)
-        try graph.compute()
+        try run(indices)
         XCTAssertEqual(indices.int32s(), [1, 2, 0])
 
         let top = tensor([1, 9, 5, 7]).topK(2)
-        let graph2 = context.graph()
-        graph2.buildForwardExpand(top)
-        try graph2.compute()
+        try run(top)
         XCTAssertEqual(Set(top.int32s()), [1, 3])
     }
 
@@ -608,12 +560,9 @@ final class TensorOpsTests: XCTestCase {
         let vValues: [Float] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         let scale = Float(0.5)
 
-        let q = context.tensor(.f32, 4, 2, 1)
-        q.copy(from: qValues)
-        let k = context.tensor(.f32, 4, 3, 1)
-        k.copy(from: kValues)
-        let v = context.tensor(.f32, 4, 3, 1)
-        v.copy(from: vValues)
+        let q = tensor(qValues, shape: [4, 2, 1])
+        let k = tensor(kValues, shape: [4, 3, 1])
+        let v = tensor(vValues, shape: [4, 3, 1])
 
         let fused = try evaluate(q.flashAttnExt(k: k, v: v, scale: scale))
 
@@ -637,15 +586,13 @@ final class TensorOpsTests: XCTestCase {
     }
 
     func testF16RoundTrip() throws {
-        let half = context.tensor(.f16, 4)
-        half.copy(from: [1.5, -2, 0.25, 100])
+        let half = tensor([1.5, -2, 0.25, 100], type: .f16)
         XCTAssertEqual(half.floats(), [1.5, -2, 0.25, 100])
     }
 
     func testQuantizedRoundTrip() throws {
         let values = (0..<32).map { Float($0) / 16 - 1 }
-        let quantized = context.tensor(.q8_0, 32)
-        quantized.copy(from: values)
+        let quantized = tensor(values, type: .q8_0)
 
         for (dequantized, original) in zip(quantized.floats(), values) {
             XCTAssertEqual(dequantized, original, accuracy: 0.01)
@@ -657,12 +604,9 @@ final class TensorOpsTests: XCTestCase {
         let weights = (0..<64).map { Float($0 % 7) / 4 - 0.7 }
         let x = (0..<32).map { Float($0 % 5) / 3 - 0.6 }
 
-        let wq = context.tensor(.q8_0, 32, 2)
-        wq.copy(from: weights)
-        let wf = context.tensor(.f32, 32, 2)
-        wf.copy(from: weights)
-        let input = context.tensor(.f32, 32)
-        input.copy(from: x)
+        let wq = tensor(weights, type: .q8_0, shape: [32, 2])
+        let wf = tensor(weights, shape: [32, 2])
+        let input = tensor(x)
 
         let quantizedResult = try evaluate(wq.mulMat(input))
         let referenceResult = try evaluate(wf.mulMat(input))
@@ -674,10 +618,8 @@ final class TensorOpsTests: XCTestCase {
 
     func testChainedGraph() throws {
         // (a · wᵀ + bias).relu() — one dense layer.
-        let w = context.tensor(.f32, 2, 3)
-        w.copy(from: [1, 0, 0, 1, -1, -1])
-        let x = context.tensor(.f32, 2)
-        x.copy(from: [3, 5])
+        let w = tensor([1, 0, 0, 1, -1, -1], shape: [2, 3])
+        let x = tensor([3, 5])
         let bias = tensor([1, 1, 1])
 
         let out = try evaluate((w.mulMat(x) + bias).relu())

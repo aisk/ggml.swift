@@ -4,8 +4,8 @@ import CGGML
 /// allocating their tensors in backend buffers and copying data between
 /// backends as needed. Mirrors `ggml_backend_sched_t` 1:1.
 ///
-/// This is the modern compute path: build the graph in a `noAlloc` context,
-/// let the scheduler allocate it, upload input data, then ``compute(_:)``.
+/// Build a ``Graph``, let the scheduler allocate it, upload input data,
+/// then ``compute(_:)``.
 public final class Scheduler {
     let rawValue: ggml_backend_sched_t
 
@@ -19,7 +19,7 @@ public final class Scheduler {
     /// Mirrors `ggml_backend_sched_new`.
     public init(
         backends: [Backend],
-        graphSize: Int = Graph.defaultSize,
+        graphSize: Int = Graph.defaultCapacity,
         parallel: Bool = false,
         opOffload: Bool = true
     ) {

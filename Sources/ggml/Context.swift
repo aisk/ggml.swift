@@ -1,11 +1,12 @@
 import CGGML
 
-/// Owns a `ggml_context`: an arena that holds tensor metadata, tensor data
-/// (unless `noAlloc` is set) and compute graphs. Mirrors `ggml_context` 1:1.
+/// Owns a `ggml_context`: an arena that holds tensor metadata and compute
+/// graphs. Internal — the public API deals in ``Graph``, ``GGUF`` and
+/// ``Tensor``, which manage their contexts behind the scenes.
 ///
-/// The context is freed (`ggml_free`) when the last reference to it — either
-/// the `Context` itself or any `Tensor`/`Graph` created from it — goes away.
-public final class Context {
+/// The context is freed (`ggml_free`) when the last reference to it — a
+/// `Graph`, a `GGUF` or any `Tensor` created from it — goes away.
+final class Context {
     let rawValue: OpaquePointer
 
     // Backend buffers holding data of tensors from this context; retained
@@ -26,15 +27,13 @@ public final class Context {
     /// Creates a context backed by an internally allocated arena of
     /// `memorySize` bytes. Mirrors `ggml_init`.
     ///
-    /// - Parameters:
-    ///   - memorySize: Total size of the arena. Use ``tensorOverhead`` and
-    ///     ``graphOverhead`` plus the tensor data sizes to estimate it.
-    ///   - noAlloc: When true, tensors created in this context carry no data
-    ///     buffer (their data lives in a backend buffer instead).
-    public init(memorySize: Int, noAlloc: Bool = false) throws {
+    /// `noAlloc` contexts hold only tensor metadata (data lives in backend
+    /// buffers); the data-carrying mode remains solely for tensors staged
+    /// in host memory for GGUF writing.
+    init(memorySize: Int, noAlloc: Bool) {
         let params = ggml_init_params(mem_size: memorySize, mem_buffer: nil, no_alloc: noAlloc)
         guard let context = ggml_init(params) else {
-            throw GGMLError.contextInitFailed
+            preconditionFailure("ggml_init failed to allocate a \(memorySize)-byte arena")
         }
         self.rawValue = context
     }
@@ -51,35 +50,14 @@ public final class Context {
 
     /// Bytes of arena memory consumed by one tensor's metadata.
     /// Mirrors `ggml_tensor_overhead`.
-    public static var tensorOverhead: Int {
+    static var tensorOverhead: Int {
         ggml_tensor_overhead()
-    }
-
-    /// Bytes of arena memory consumed by an (empty) compute graph.
-    /// Mirrors `ggml_graph_overhead`.
-    public static var graphOverhead: Int {
-        ggml_graph_overhead()
-    }
-
-    /// Bytes of the arena currently in use. Mirrors `ggml_used_mem`.
-    public var usedMemory: Int {
-        ggml_used_mem(rawValue)
     }
 
     // MARK: - Tensors
 
-    /// Creates a tensor of up to 4 dimensions.
-    /// Mirrors `ggml_new_tensor` (and its `_1d` ... `_4d` variants).
-    ///
-    /// As in ggml, `shape[0]` is the number of elements in the innermost
-    /// (contiguous) dimension — for a matrix that is the number of columns.
-    public func tensor(_ type: TensorType, _ shape: Int...) -> Tensor {
-        tensor(type, shape: shape)
-    }
-
-    /// Creates a tensor of up to 4 dimensions.
-    /// Mirrors `ggml_new_tensor` (and its `_1d` ... `_4d` variants).
-    public func tensor(_ type: TensorType, shape: [Int]) -> Tensor {
+    /// Creates a tensor of up to 4 dimensions. Mirrors `ggml_new_tensor`.
+    func tensor(_ type: TensorType, shape: [Int]) -> Tensor {
         precondition((1...4).contains(shape.count), "ggml tensors have 1 to 4 dimensions")
         var ne = shape.map(Int64.init)
         let tensor = ggml_new_tensor(rawValue, type.cValue, Int32(ne.count), &ne)
@@ -87,15 +65,37 @@ public final class Context {
     }
 
     /// Looks up a tensor in this context by name. Mirrors `ggml_get_tensor`.
-    public func tensor(named name: String) -> Tensor? {
+    func tensor(named name: String) -> Tensor? {
         ggml_get_tensor(rawValue, name).map { Tensor(rawValue: $0, context: self) }
     }
 
-    // MARK: - Graphs
+    // MARK: - Backend allocation
 
-    /// Creates an empty compute graph with the default capacity
-    /// (`GGML_DEFAULT_GRAPH_SIZE` nodes). Mirrors `ggml_new_graph`.
-    public func graph() -> Graph {
-        Graph(context: self)
+    // Whether any non-view tensor still has no data, i.e. whether
+    // `allocTensors(on:)` would actually allocate something. Views never
+    // dangle on their own: their data resolves with their source.
+    private var hasUnallocatedTensors: Bool {
+        var tensor = ggml_get_first_tensor(rawValue)
+        while let current = tensor {
+            if current.pointee.data == nil && current.pointee.view_src == nil {
+                return true
+            }
+            tensor = ggml_get_next_tensor(rawValue, current)
+        }
+        return false
+    }
+
+    /// Allocates all not-yet-allocated tensors of this context in a single
+    /// buffer on `backend`, which the context keeps alive. Returns `nil`
+    /// when every tensor is already allocated.
+    /// Mirrors `ggml_backend_alloc_ctx_tensors`.
+    func allocTensors(on backend: Backend) throws -> BackendBuffer? {
+        guard hasUnallocatedTensors else { return nil }
+        guard let raw = ggml_backend_alloc_ctx_tensors(rawValue, backend.rawValue) else {
+            throw GGMLError.bufferAllocationFailed
+        }
+        let buffer = BackendBuffer(rawValue: raw, backend: backend)
+        retainedBuffers.append(buffer)
+        return buffer
     }
 }

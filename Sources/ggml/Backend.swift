@@ -75,7 +75,7 @@ public final class Backend {
 
     /// Executes a graph directly on this backend. All graph tensors must
     /// already be allocated in buffers this backend can use (e.g. via
-    /// ``Context/allocTensors(on:)``). For multi-backend execution or
+    /// ``Graph/allocTensors(on:)``). For multi-backend execution or
     /// automatic allocation use a ``Scheduler`` instead.
     /// Mirrors `ggml_backend_graph_compute`.
     public func compute(_ graph: Graph) throws {

@@ -1,11 +1,11 @@
 import CGGML
 
-/// A view over a `ggml_tensor` that lives inside a ``Context``.
-/// Mirrors `ggml_tensor` 1:1.
+/// A view over a `ggml_tensor` that lives inside an arena owned by a
+/// ``Graph`` or a ``GGUF``. Mirrors `ggml_tensor` 1:1.
 ///
-/// Tensors do not own their storage — the context does. Each `Tensor` keeps
-/// a strong reference to its context, so a tensor can never outlive the
-/// arena its data lives in.
+/// Tensors do not own their storage — the arena and backend buffers do.
+/// Each `Tensor` keeps a strong reference to its arena, so a tensor can
+/// never outlive the memory its metadata lives in.
 public struct Tensor {
     let rawValue: UnsafeMutablePointer<ggml_tensor>
     let context: Context
@@ -15,17 +15,17 @@ public struct Tensor {
         self.context = context
     }
 
-    /// Returns the same tensor bound to another context, so that operations
+    /// Returns the same tensor bound to `graph`, so that operations
     /// starting from it are recorded there.
     ///
-    /// Needed when the leading operand of an expression lives in a different
-    /// context than the graph being built — typically weights loaded from a
-    /// ``GGUF`` file: `weights.within(graphContext).mulMat(x)`. The target
-    /// context retains the receiver's own context, so the underlying storage
-    /// stays alive for as long as the graph does.
-    public func within(_ context: Context) -> Tensor {
-        context.retain(self.context)
-        return Tensor(rawValue: rawValue, context: context)
+    /// Needed when the leading operand of an expression does not belong to
+    /// the graph being built — typically weights loaded from a ``GGUF``
+    /// file: `weights.within(graph).mulMat(x)`. The graph retains the
+    /// receiver's own arena, so the underlying storage stays alive for as
+    /// long as the graph does.
+    public func within(_ graph: Graph) -> Tensor {
+        graph.context.retain(self.context)
+        return Tensor(rawValue: rawValue, context: graph.context)
     }
 
     /// Element type of the tensor.
@@ -71,9 +71,17 @@ public struct Tensor {
 
     // MARK: - Data access
 
-    /// Whether the tensor's data lives in a backend buffer (modern path)
-    /// rather than directly in its context (legacy path).
-    public var isBackendAllocated: Bool {
+    /// Whether the tensor's data has been allocated yet — graph tensors
+    /// are allocated by a ``Scheduler`` or ``Graph/allocTensors(on:)``,
+    /// GGUF tensors by ``GGUF/load(on:)``.
+    public var isAllocated: Bool {
+        rawValue.pointee.data != nil
+    }
+
+    // Tensors staged in host memory for GGUF writing carry their data in
+    // their own arena and have no backend buffer; everything else lives in
+    // a backend buffer once allocated.
+    private var isBackendAllocated: Bool {
         rawValue.pointee.buffer != nil
     }
 
@@ -97,9 +105,8 @@ public struct Tensor {
     /// tensor's element type on the fly (via `ggml_quantize_chunk` for
     /// non-f32 types). Types requiring an importance matrix are unsupported.
     ///
-    /// Works for both storage modes: backend-allocated tensors go through
-    /// `ggml_backend_tensor_set` (handles device memory), context-allocated
-    /// tensors are written directly.
+    /// Backend-allocated tensors go through `ggml_backend_tensor_set`
+    /// (handles device memory); GGUF staging tensors are written directly.
     public func copy(from values: [Float]) {
         precondition(values.count == elementCount,
                      "value count \(values.count) does not match element count \(elementCount)")
@@ -125,9 +132,8 @@ public struct Tensor {
     /// converting from the tensor's element type on the fly (via the type's
     /// `to_float` trait). The tensor must be contiguous.
     ///
-    /// Works for both storage modes: backend-allocated tensors go through
-    /// `ggml_backend_tensor_get` (handles device memory), context-allocated
-    /// tensors are read directly.
+    /// Backend-allocated tensors go through `ggml_backend_tensor_get`
+    /// (handles device memory); GGUF staging tensors are read directly.
     public func floats() -> [Float] {
         if type == .f32 {
             return [Float](unsafeUninitializedCapacity: elementCount) { destination, count in
@@ -168,13 +174,7 @@ public struct Tensor {
         precondition(type == .i32, "copy(from: [Int32]) requires an i32 tensor, got \(type)")
         precondition(values.count == elementCount,
                      "value count \(values.count) does not match element count \(elementCount)")
-        values.withUnsafeBytes { source in
-            if isBackendAllocated {
-                ggml_backend_tensor_set(rawValue, source.baseAddress!, 0, byteCount)
-            } else {
-                rawValue.pointee.data.copyMemory(from: source.baseAddress!, byteCount: byteCount)
-            }
-        }
+        values.withUnsafeBytes(writeRaw)
     }
 
     /// Reads the tensor's data as an array of `Int32`.
@@ -182,13 +182,7 @@ public struct Tensor {
     public func int32s() -> [Int32] {
         precondition(type == .i32, "int32s() requires an i32 tensor, got \(type)")
         return [Int32](unsafeUninitializedCapacity: elementCount) { destination, count in
-            if isBackendAllocated {
-                ggml_backend_tensor_get(rawValue, destination.baseAddress!, 0, byteCount)
-            } else {
-                destination.baseAddress!.update(
-                    from: rawValue.pointee.data.assumingMemoryBound(to: Int32.self),
-                    count: elementCount)
-            }
+            readRaw(into: destination.baseAddress!)
             count = elementCount
         }
     }

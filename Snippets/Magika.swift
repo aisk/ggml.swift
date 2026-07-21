@@ -48,29 +48,22 @@ guard arguments.count >= 3 else {
 let modelPath = arguments[1]
 let files = Array(arguments[2...])
 
-// --- Load: with noAlloc the GGUF context holds only tensor metadata.
-// Allocate the tensors in a backend buffer, then stream each tensor's
-// bytes from the file's data section.
+// --- Load: metadata first, then the weights into a backend buffer.
 guard let backend = Backend(type: .cpu) else {
     fatalError("no CPU backend available")
 }
 
-guard let modelData = try? Data(contentsOf: URL(fileURLWithPath: modelPath), options: .alwaysMapped),
-      let gguf = try? GGUF(path: modelPath, noAlloc: true) else {
+let gguf: GGUF
+do {
+    gguf = try GGUF(path: modelPath)
+    try gguf.load(on: backend)
+} catch {
     print("failed to load model from \(modelPath)")
     exit(1)
 }
-let weights = gguf.context!
-try weights.allocTensors(on: backend)
-
-for name in gguf.tensorNames {
-    let tensor = weights.tensor(named: name)!
-    let begin = gguf.dataOffset + gguf.tensorOffset(named: name)!
-    modelData[begin..<begin + tensor.byteCount].withUnsafeBytes(tensor.copy(from:))
-}
 
 let weight = { (name: String) -> Tensor in
-    guard let tensor = weights.tensor(named: name) else {
+    guard let tensor = gguf.tensor(named: name) else {
         fatalError("tensor '\(name)' not found in \(modelPath)")
     }
     return tensor
@@ -91,13 +84,12 @@ guard !inputs.isEmpty else {
 }
 
 // --- Graph: the model sees 1536 one-hot encoded bytes per file.
-let contextSize = Context.tensorOverhead * Graph.defaultSize + Context.graphOverhead
-let compute = try Context(memorySize: contextSize, noAlloc: true)
+let graph = Graph()
 
-let input = compute.tensor(.f32, 257, inputSize, inputs.count) // one-hot
+let input = graph.tensor(.f32, 257, inputSize, inputs.count) // one-hot
 input.setInput()
 
-var cur = weight("dense/kernel:0").within(compute)
+var cur = weight("dense/kernel:0").within(graph)
     .mulMat(input)
     .add(weight("dense/bias:0"))                 // [128, 1536, nFiles]
     .gelu()
@@ -107,11 +99,11 @@ cur = cur.norm(eps: normEps)
     .mul(weight("layer_normalization/gamma:0"))
     .add(weight("layer_normalization/beta:0"))
     .transpose().cont()                          // [512, 384, nFiles]
-cur = weight("dense_1/kernel:0").within(compute)
+cur = weight("dense_1/kernel:0").within(graph)
     .mulMat(cur)
     .add(weight("dense_1/bias:0"))               // [256, 384, nFiles]
     .gelu()
-cur = weight("dense_2/kernel:0").within(compute)
+cur = weight("dense_2/kernel:0").within(graph)
     .mulMat(cur)
     .add(weight("dense_2/bias:0"))               // [256, 384, nFiles]
     .gelu()
@@ -121,13 +113,12 @@ cur = cur.transpose().cont()                     // [384, 256, nFiles]
 cur = cur.norm(eps: normEps)
     .mul(weight("layer_normalization_1/gamma:0"))
     .add(weight("layer_normalization_1/beta:0"))
-let probs = weight("target_label/kernel:0").within(compute)
+let probs = weight("target_label/kernel:0").within(graph)
     .mulMat(cur)
     .add(weight("target_label/bias:0"))
     .softMax()                                   // [nLabels, nFiles]
 probs.setOutput()
 
-let graph = compute.graph()
 graph.buildForwardExpand(probs)
 
 let scheduler = Scheduler(backends: [backend])

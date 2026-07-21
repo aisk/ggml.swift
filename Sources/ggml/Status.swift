@@ -34,8 +34,6 @@ public enum Status: Equatable, Sendable {
 
 /// Errors thrown by the Swift binding.
 public enum GGMLError: Error, Equatable {
-    /// `ggml_init` returned NULL.
-    case contextInitFailed
     /// A graph computation finished with a non-success status.
     case computeFailed(Status)
     /// `ggml_backend_alloc_ctx_tensors` could not allocate a buffer.
