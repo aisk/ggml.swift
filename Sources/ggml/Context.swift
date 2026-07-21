@@ -9,6 +9,11 @@ import CGGML
 final class Context {
     let rawValue: OpaquePointer
 
+    // Whether this arena belongs to a Graph and may record operations.
+    // Storage arenas (GGUF weights, GGUF write staging) must not: they are
+    // sized for their tensors only, and ggml aborts on arena overflow.
+    let isBuilder: Bool
+
     // Backend buffers holding data of tensors from this context; retained
     // so the data outlives neither the context nor its tensors.
     var retainedBuffers: [BackendBuffer] = []
@@ -30,18 +35,20 @@ final class Context {
     /// `noAlloc` contexts hold only tensor metadata (data lives in backend
     /// buffers); the data-carrying mode remains solely for tensors staged
     /// in host memory for GGUF writing.
-    init(memorySize: Int, noAlloc: Bool) {
+    init(memorySize: Int, noAlloc: Bool, isBuilder: Bool = false) {
         let params = ggml_init_params(mem_size: memorySize, mem_buffer: nil, no_alloc: noAlloc)
         guard let context = ggml_init(params) else {
             preconditionFailure("ggml_init failed to allocate a \(memorySize)-byte arena")
         }
         self.rawValue = context
+        self.isBuilder = isBuilder
     }
 
     /// Takes ownership of an existing `ggml_context` created elsewhere
     /// (e.g. by `gguf_init_from_file`); it is freed on deinit as usual.
     init(adopting rawValue: OpaquePointer) {
         self.rawValue = rawValue
+        self.isBuilder = false
     }
 
     deinit {

@@ -24,7 +24,7 @@ public final class Graph {
         precondition(capacity > 0, "graph capacity must be positive")
         let memorySize = Context.tensorOverhead * capacity
             + ggml_graph_overhead_custom(capacity, false)
-        self.context = Context(memorySize: memorySize, noAlloc: true)
+        self.context = Context(memorySize: memorySize, noAlloc: true, isBuilder: true)
         self.rawValue = ggml_new_graph_custom(context.rawValue, capacity, false)
     }
 
