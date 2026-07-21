@@ -64,10 +64,17 @@ public final class Graph {
         nodeCount > 0 ? node(-1) : nil
     }
 
+    // Tensors passed to buildForwardExpand. Besides being the graph's
+    // logical outputs, they transitively retain the storage arenas (e.g.
+    // GGUF weights) their expressions read from, so computing the graph
+    // can never touch freed memory.
+    var roots: [Tensor] = []
+
     /// Expands the graph with the operations needed to compute `tensor`.
     /// Mirrors `ggml_build_forward_expand`.
     public func buildForwardExpand(_ tensor: Tensor) {
         ggml_build_forward_expand(rawValue, tensor.rawValue)
+        roots.append(tensor)
     }
 
     // MARK: - Allocation

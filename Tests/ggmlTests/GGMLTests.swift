@@ -211,6 +211,25 @@ final class GGUFTests: XCTestCase {
         XCTAssertEqual(logits.floats(), [8.5, 5.5])
     }
 
+    func testCrossGraphReferencesDoNotLeak() throws {
+        // Two graphs that each read a tensor of the other must not keep
+        // each other alive through a strong reference cycle.
+        weak var arenaA: Context?
+        weak var arenaB: Context?
+        do {
+            let a = Graph()
+            let b = Graph()
+            arenaA = a.context
+            arenaB = b.context
+            let x = a.tensor(.f32, 2)
+            let y = b.tensor(.f32, 2)
+            _ = x.add(y.within(a))
+            _ = y.add(x.within(b))
+        }
+        XCTAssertNil(arenaA)
+        XCTAssertNil(arenaB)
+    }
+
     func testGraphRetainsWeightContexts() throws {
         try writeModel()
 

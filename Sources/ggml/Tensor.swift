@@ -10,9 +10,24 @@ public struct Tensor {
     let rawValue: UnsafeMutablePointer<ggml_tensor>
     let context: Context
 
-    init(rawValue: UnsafeMutablePointer<ggml_tensor>, context: Context) {
+    // Storage arenas (other than `context`) feeding the expression this
+    // tensor is the result of; carried along the chain so that computing
+    // the tensor can never read freed cross-arena data. Deduplicated by
+    // identity — see retain(_:into:).
+    let retained: [Context]
+
+    init(rawValue: UnsafeMutablePointer<ggml_tensor>, context: Context, retained: [Context] = []) {
         self.rawValue = rawValue
         self.context = context
+        self.retained = retained
+    }
+
+    // Adds `source` to `list` unless it is the recording context itself or
+    // already present.
+    static func retain(_ source: Context, into list: inout [Context], recording: Context) {
+        if source !== recording && !list.contains(where: { $0 === source }) {
+            list.append(source)
+        }
     }
 
     /// Returns the same tensor bound to `graph`, so that operations
@@ -20,12 +35,14 @@ public struct Tensor {
     ///
     /// Needed when the leading operand of an expression does not belong to
     /// the graph being built — typically weights loaded from a ``GGUF``
-    /// file: `weights.within(graph).mulMat(x)`. The graph retains the
-    /// receiver's own arena, so the underlying storage stays alive for as
-    /// long as the graph does.
+    /// file: `weights.within(graph).mulMat(x)`. The returned tensor (and
+    /// every expression built from it) retains the receiver's own arena,
+    /// so the underlying storage stays alive for as long as the results —
+    /// and the graphs they are built into — do.
     public func within(_ graph: Graph) -> Tensor {
-        graph.context.retain(self.context)
-        return Tensor(rawValue: rawValue, context: graph.context)
+        var retained = retained
+        Tensor.retain(context, into: &retained, recording: graph.context)
+        return Tensor(rawValue: rawValue, context: graph.context, retained: retained)
     }
 
     /// Element type of the tensor.

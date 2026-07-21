@@ -20,14 +20,20 @@ extension Tensor {
         return context.rawValue
     }
 
-    // Additional source operands are passed through so that the recording
-    // context retains their contexts — cross-context sources (e.g. GGUF
-    // weights) must not be freed while the graph can still read them.
+    // Additional source operands are passed through so that the result
+    // carries their storage arenas in its retained list — cross-arena
+    // sources (e.g. GGUF weights) must not be freed while the expression
+    // can still be computed. Building the result into a graph then keeps
+    // the whole chain alive for the graph's lifetime.
     private func wrap(_ result: UnsafeMutablePointer<ggml_tensor>?, _ sources: Tensor?...) -> Tensor {
+        var retained = retained
         for case let source? in sources {
-            context.retain(source.context)
+            Tensor.retain(source.context, into: &retained, recording: context)
+            for storage in source.retained {
+                Tensor.retain(storage, into: &retained, recording: context)
+            }
         }
-        return Tensor(rawValue: result!, context: context)
+        return Tensor(rawValue: result!, context: context, retained: retained)
     }
 
     // MARK: - Arithmetic
