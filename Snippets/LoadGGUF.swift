@@ -15,13 +15,13 @@ do {
     let gguf = GGUF()
     gguf.set("tiny-fc", forKey: "general.architecture")
 
-    gguf.tensor(.f32, 4, 3, named: "fc1.weight")
+    try gguf.tensor(.f32, 4, 3, named: "fc1.weight")
         .copy(from: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1])
-    gguf.tensor(.f32, 3, named: "fc1.bias")
+    try gguf.tensor(.f32, 3, named: "fc1.bias")
         .copy(from: [0, -3, 0])
-    gguf.tensor(.f32, 3, 2, named: "fc2.weight")
+    try gguf.tensor(.f32, 3, 2, named: "fc2.weight")
         .copy(from: [1, 1, 1, -1, 0, 1])
-    gguf.tensor(.f32, 2, named: "fc2.bias")
+    try gguf.tensor(.f32, 2, named: "fc2.bias")
         .copy(from: [0.5, -0.5])
 
     try gguf.write(to: path)
@@ -50,7 +50,7 @@ let logits = fc2Weight.within(graph).mulMat(hidden).add(fc2Bias)
 graph.buildForwardExpand(logits)
 
 try graph.allocTensors(on: cpu)
-x.copy(from: [1, 2, 3, 4])
+try x.copy(from: [1, 2, 3, 4])
 try cpu.compute(graph)
 
 print("logits:", logits.floats()) // [8.5, 5.5]

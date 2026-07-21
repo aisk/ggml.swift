@@ -79,13 +79,13 @@ final class SimpleBackendTests: XCTestCase {
         XCTAssertTrue(scheduler.allocGraph(graph))
         XCTAssertTrue(a.isAllocated)
 
-        a.copy(from: [
+        try a.copy(from: [
             2, 8,
             5, 1,
             4, 2,
             8, 6,
         ])
-        b.copy(from: [
+        try b.copy(from: [
             10, 5,
             9, 9,
             5, 4,
@@ -137,17 +137,17 @@ final class GGUFTests: XCTestCase {
         gguf.set(true, forKey: "test.trained")
 
         // A 4 -> 3 -> 2 fully connected network with hand-picked weights.
-        gguf.tensor(.f32, 4, 3, named: "fc1.weight").copy(from: [
+        try gguf.tensor(.f32, 4, 3, named: "fc1.weight").copy(from: [
             1, 0, 0, 0,
             0, 1, 0, 0,
             0, 0, 1, 1,
         ])
-        gguf.tensor(.f32, 3, named: "fc1.bias").copy(from: [0, -3, 0])
-        gguf.tensor(.f32, 3, 2, named: "fc2.weight").copy(from: [
+        try gguf.tensor(.f32, 3, named: "fc1.bias").copy(from: [0, -3, 0])
+        try gguf.tensor(.f32, 3, 2, named: "fc2.weight").copy(from: [
             1, 1, 1,
             -1, 0, 1,
         ])
-        gguf.tensor(.f32, 2, named: "fc2.bias").copy(from: [0.5, -0.5])
+        try gguf.tensor(.f32, 2, named: "fc2.bias").copy(from: [0.5, -0.5])
         try gguf.write(to: path)
     }
 
@@ -203,7 +203,7 @@ final class GGUFTests: XCTestCase {
         graph.buildForwardExpand(logits)
 
         try graph.allocTensors(on: cpu)
-        x.copy(from: [1, 2, 3, 4])
+        try x.copy(from: [1, 2, 3, 4])
         try cpu.compute(graph)
 
         // fc1: [1, 2, 7] + [0, -3, 0] -> relu -> [1, 0, 7]
@@ -253,7 +253,7 @@ final class GGUFTests: XCTestCase {
 
         graph.buildForwardExpand(logits)
         try graph.allocTensors(on: cpu)
-        x.copy(from: [1, 2, 3, 4])
+        try x.copy(from: [1, 2, 3, 4])
         try cpu.compute(graph)
 
         XCTAssertEqual(logits.floats(), [8.5, 5.5])
@@ -268,7 +268,7 @@ final class GGUFTests: XCTestCase {
             let weight = graph.tensor(.f32, 4)
             weight.name = "w"
             try graph.allocTensors(on: cpu)
-            weight.copy(from: [1, 2, 3, 4])
+            try weight.copy(from: [1, 2, 3, 4])
             gguf.add(weight)
         }
         try gguf.write(to: path)
@@ -309,8 +309,8 @@ final class BackendBufferTests: XCTestCase {
         // A second call has nothing left to allocate.
         XCTAssertNil(try graph.allocTensors(on: cpu))
 
-        a.copy(from: [2, 8, 5, 1, 4, 2, 8, 6])
-        b.copy(from: [10, 5, 9, 9, 5, 4])
+        try a.copy(from: [2, 8, 5, 1, 4, 2, 8, 6])
+        try b.copy(from: [10, 5, 9, 9, 5, 4])
         try cpu.compute(graph)
 
         XCTAssertEqual(result.floats(), [
@@ -355,9 +355,9 @@ final class TensorOpsTests: XCTestCase {
         let tensor = graph.tensor(type, shape: shape ?? [values.count])
         try! graph.allocTensors(on: cpu)
         if type == .f32 {
-            tensor.copy(from: values)
+            try! tensor.copy(from: values)
         } else {
-            tensor.quantize(from: values)
+            try! tensor.quantize(from: values)
         }
         return tensor
     }
@@ -365,7 +365,7 @@ final class TensorOpsTests: XCTestCase {
     private func tensor(int32 values: [Int32], shape: [Int]? = nil) -> Tensor {
         let tensor = graph.tensor(.i32, shape: shape ?? [values.count])
         try! graph.allocTensors(on: cpu)
-        tensor.copy(from: values)
+        try! tensor.copy(from: values)
         return tensor
     }
 

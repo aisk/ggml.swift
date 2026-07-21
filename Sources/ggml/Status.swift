@@ -42,4 +42,16 @@ public enum GGMLError: Error, Equatable {
     case ggufLoadFailed(path: String)
     /// `gguf_write_to_file` could not write the file.
     case ggufWriteFailed(path: String)
+    /// A write's element type does not match the tensor's.
+    case typeMismatch(expected: TensorType, actual: TensorType)
+    /// A value array's element count does not match the tensor's.
+    case elementCountMismatch(expected: Int, actual: Int)
+    /// A raw byte buffer's size does not match the tensor's.
+    case byteCountMismatch(expected: Int, actual: Int)
+    /// Quantizing to the type requires an importance matrix, which
+    /// ``Tensor/quantize(from:)`` does not support.
+    case importanceMatrixRequired(TensorType)
+    /// The tensor's data has not been allocated yet (allocate the graph or
+    /// load the GGUF file first).
+    case tensorNotAllocated
 }

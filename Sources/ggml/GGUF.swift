@@ -96,7 +96,7 @@ public final class GGUF {
         for name in tensorNames {
             let tensor = context.tensor(named: name)!
             let begin = dataOffset + tensorOffset(named: name)!
-            data[begin..<begin + tensor.byteCount].withUnsafeBytes(tensor.copy(from:))
+            try data[begin..<begin + tensor.byteCount].withUnsafeBytes { try tensor.copy(from: $0) }
         }
     }
 

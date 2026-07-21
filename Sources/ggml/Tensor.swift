@@ -111,6 +111,8 @@ public struct Tensor {
     }
 
     private func readRaw(into destination: UnsafeMutableRawPointer) {
+        precondition(isAllocated,
+                     "tensor '\(name)' has no data yet; allocate the graph or load the file first")
         if isBackendAllocated {
             ggml_backend_tensor_get(rawValue, destination, 0, byteCount)
         } else {
@@ -124,12 +126,16 @@ public struct Tensor {
     ///
     /// Backend-allocated tensors go through `ggml_backend_tensor_set`
     /// (handles device memory); GGUF staging tensors are written directly.
-    public func copy(from values: [Float]) {
-        precondition(type == .f32,
-                     "copy(from: [Float]) requires an f32 tensor, got \(type); "
-                     + "use quantize(from:) to convert")
-        precondition(values.count == elementCount,
-                     "value count \(values.count) does not match element count \(elementCount)")
+    public func copy(from values: [Float]) throws {
+        guard type == .f32 else {
+            throw GGMLError.typeMismatch(expected: .f32, actual: type)
+        }
+        guard values.count == elementCount else {
+            throw GGMLError.elementCountMismatch(expected: elementCount, actual: values.count)
+        }
+        guard isAllocated else {
+            throw GGMLError.tensorNotAllocated
+        }
         values.withUnsafeBytes(writeRaw)
     }
 
@@ -137,16 +143,21 @@ public struct Tensor {
     /// result — quantizing via `ggml_quantize_chunk` for quantized types.
     /// Types requiring an importance matrix are unsupported. For an f32
     /// tensor this is a plain copy.
-    public func quantize(from values: [Float]) {
-        precondition(values.count == elementCount,
-                     "value count \(values.count) does not match element count \(elementCount)")
+    public func quantize(from values: [Float]) throws {
+        guard values.count == elementCount else {
+            throw GGMLError.elementCountMismatch(expected: elementCount, actual: values.count)
+        }
+        guard isAllocated else {
+            throw GGMLError.tensorNotAllocated
+        }
         if type == .f32 {
             values.withUnsafeBytes(writeRaw)
             return
         }
 
-        precondition(!type.requiresImatrix,
-                     "quantizing to \(type) requires an importance matrix")
+        guard !type.requiresImatrix else {
+            throw GGMLError.importanceMatrixRequired(type)
+        }
         let rowWidth = shape[0]
         let rows = elementCount / rowWidth
         var quantized = [UInt8](repeating: 0, count: byteCount)
@@ -188,9 +199,13 @@ public struct Tensor {
     /// Copies raw bytes into the tensor's data without any conversion —
     /// e.g. quantized blocks read straight from a GGUF file's data section.
     /// The byte count must match the tensor's ``byteCount`` exactly.
-    public func copy(from bytes: UnsafeRawBufferPointer) {
-        precondition(bytes.count == byteCount,
-                     "byte count \(bytes.count) does not match tensor size \(byteCount)")
+    public func copy(from bytes: UnsafeRawBufferPointer) throws {
+        guard bytes.count == byteCount else {
+            throw GGMLError.byteCountMismatch(expected: byteCount, actual: bytes.count)
+        }
+        guard isAllocated else {
+            throw GGMLError.tensorNotAllocated
+        }
         writeRaw(bytes)
     }
 
@@ -200,10 +215,16 @@ public struct Tensor {
     /// Disfavored so that untyped integer-literal arrays resolve to the
     /// `[Float]` overload; pass `as [Int32]` explicitly for i32 tensors.
     @_disfavoredOverload
-    public func copy(from values: [Int32]) {
-        precondition(type == .i32, "copy(from: [Int32]) requires an i32 tensor, got \(type)")
-        precondition(values.count == elementCount,
-                     "value count \(values.count) does not match element count \(elementCount)")
+    public func copy(from values: [Int32]) throws {
+        guard type == .i32 else {
+            throw GGMLError.typeMismatch(expected: .i32, actual: type)
+        }
+        guard values.count == elementCount else {
+            throw GGMLError.elementCountMismatch(expected: elementCount, actual: values.count)
+        }
+        guard isAllocated else {
+            throw GGMLError.tensorNotAllocated
+        }
         values.withUnsafeBytes(writeRaw)
     }
 
@@ -226,6 +247,8 @@ public struct Tensor {
     /// Raw read-only access to the tensor's data buffer. Only valid for
     /// host-resident data; for device tensors use ``floats()``.
     public func withUnsafeBytes<R>(_ body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R {
+        precondition(isAllocated,
+                     "tensor '\(name)' has no data yet; allocate the graph or load the file first")
         precondition(isHostAccessible,
                      "raw access requires host-resident data; use floats() for device tensors")
         return try body(UnsafeRawBufferPointer(start: rawValue.pointee.data, count: byteCount))
@@ -234,6 +257,8 @@ public struct Tensor {
     /// Raw mutable access to the tensor's data buffer. Only valid for
     /// host-resident data; for device tensors use ``copy(from:)``.
     public func withUnsafeMutableBytes<R>(_ body: (UnsafeMutableRawBufferPointer) throws -> R) rethrows -> R {
+        precondition(isAllocated,
+                     "tensor '\(name)' has no data yet; allocate the graph or load the file first")
         precondition(isHostAccessible,
                      "raw access requires host-resident data; use copy(from:) for device tensors")
         return try body(UnsafeMutableRawBufferPointer(start: rawValue.pointee.data, count: byteCount))

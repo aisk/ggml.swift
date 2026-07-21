@@ -150,7 +150,7 @@ for (i, (_, data)) in inputs.enumerated() {
         oneHot[257 * (inputSize * i + j) + token] = 1
     }
 }
-input.copy(from: oneHot)
+try input.copy(from: oneHot)
 
 try scheduler.compute(graph)
 

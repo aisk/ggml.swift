@@ -26,13 +26,13 @@ graph.buildForwardExpand(result)
 scheduler.allocGraph(graph)
 
 // Data uploads go through the backend (handles device memory).
-a.copy(from: [
+try a.copy(from: [
     2, 8,
     5, 1,
     4, 2,
     8, 6,
 ])
-b.copy(from: [
+try b.copy(from: [
     10, 5,
     9, 9,
     5, 4,
