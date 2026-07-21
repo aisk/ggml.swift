@@ -161,6 +161,15 @@ final class GGUFTests: XCTestCase {
         XCTAssertEqual(gguf.double("test.learning_rate"), 0.05)
         XCTAssertEqual(gguf.bool("test.trained"), true)
         XCTAssertNil(gguf.string("missing.key"))
+
+        // type(forKey:) distinguishes a missing key from a mistyped read.
+        XCTAssertEqual(gguf.type(forKey: "general.architecture"), .string)
+        XCTAssertEqual(gguf.type(forKey: "test.epochs"), .int)
+        XCTAssertEqual(gguf.type(forKey: "test.learning_rate"), .double)
+        XCTAssertEqual(gguf.type(forKey: "test.trained"), .bool)
+        XCTAssertNil(gguf.type(forKey: "missing.key"))
+        XCTAssertNil(gguf.int("general.architecture"))
+
         XCTAssertEqual(Set(gguf.keys).isSuperset(of: [
             "general.architecture", "test.epochs", "test.learning_rate", "test.trained",
         ]), true)

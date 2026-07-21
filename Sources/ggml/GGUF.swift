@@ -165,6 +165,40 @@ public final class GGUF {
         return id >= 0 ? id : nil
     }
 
+    /// Type of a metadata value, as ``type(forKey:)`` reports it.
+    public enum ValueType: Equatable, Sendable {
+        /// Any of the GGUF integer types (u8 ... i64); read with ``int(_:)``.
+        case int
+        /// f32 or f64; read with ``double(_:)``.
+        case double
+        /// Read with ``bool(_:)``.
+        case bool
+        /// Read with ``string(_:)``.
+        case string
+        /// An array value — not otherwise supported by this wrapper.
+        case array
+    }
+
+    /// The type of the value stored under `key`, or `nil` when the key is
+    /// missing — distinguishes a missing key from a differently-typed one
+    /// when the typed accessors return `nil`. Mirrors `gguf_get_kv_type`.
+    public func type(forKey key: String) -> ValueType? {
+        guard let id = find(key) else { return nil }
+        switch gguf_get_kv_type(rawValue, id) {
+        case GGUF_TYPE_UINT8, GGUF_TYPE_INT8, GGUF_TYPE_UINT16, GGUF_TYPE_INT16,
+             GGUF_TYPE_UINT32, GGUF_TYPE_INT32, GGUF_TYPE_UINT64, GGUF_TYPE_INT64:
+            return .int
+        case GGUF_TYPE_FLOAT32, GGUF_TYPE_FLOAT64:
+            return .double
+        case GGUF_TYPE_BOOL:
+            return .bool
+        case GGUF_TYPE_STRING:
+            return .string
+        default:
+            return .array
+        }
+    }
+
     /// Reads a string value. Mirrors `gguf_get_val_str`.
     public func string(_ key: String) -> String? {
         guard let id = find(key), gguf_get_kv_type(rawValue, id) == GGUF_TYPE_STRING else {
