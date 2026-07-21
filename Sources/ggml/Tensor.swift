@@ -118,13 +118,26 @@ public struct Tensor {
         }
     }
 
-    /// Copies `values` into the tensor's data, converting/quantizing to the
-    /// tensor's element type on the fly (via `ggml_quantize_chunk` for
-    /// non-f32 types). Types requiring an importance matrix are unsupported.
+    /// Copies `values` into the tensor's data. The tensor must be of type
+    /// ``TensorType/f32``; for any other element type convert explicitly
+    /// with ``quantize(from:)``.
     ///
     /// Backend-allocated tensors go through `ggml_backend_tensor_set`
     /// (handles device memory); GGUF staging tensors are written directly.
     public func copy(from values: [Float]) {
+        precondition(type == .f32,
+                     "copy(from: [Float]) requires an f32 tensor, got \(type); "
+                     + "use quantize(from:) to convert")
+        precondition(values.count == elementCount,
+                     "value count \(values.count) does not match element count \(elementCount)")
+        values.withUnsafeBytes(writeRaw)
+    }
+
+    /// Converts `values` to the tensor's element type and writes the
+    /// result — quantizing via `ggml_quantize_chunk` for quantized types.
+    /// Types requiring an importance matrix are unsupported. For an f32
+    /// tensor this is a plain copy.
+    public func quantize(from values: [Float]) {
         precondition(values.count == elementCount,
                      "value count \(values.count) does not match element count \(elementCount)")
         if type == .f32 {

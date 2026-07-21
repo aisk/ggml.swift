@@ -354,7 +354,11 @@ final class TensorOpsTests: XCTestCase {
     private func tensor(_ values: [Float], type: TensorType = .f32, shape: [Int]? = nil) -> Tensor {
         let tensor = graph.tensor(type, shape: shape ?? [values.count])
         try! graph.allocTensors(on: cpu)
-        tensor.copy(from: values)
+        if type == .f32 {
+            tensor.copy(from: values)
+        } else {
+            tensor.quantize(from: values)
+        }
         return tensor
     }
 
